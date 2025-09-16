@@ -1,0 +1,361 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>BDC Swiss (KTS Tie-breakers)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+    textarea, input, button, select { font-size: 14px; }
+    textarea { width: 100%; height: 160px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f7f7f7; text-align: left; }
+    .muted { color: #777; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .pair-card { border:1px solid #ddd; padding:12px; border-radius:12px; margin:8px 0 }
+    .hidden { display:none; }
+    .ok { color: #0a0; }
+    .warn { color: #a60; }
+  </style>
+</head>
+<body>
+  <h1>🃏 Bayanihan Duelist Circuit — Swiss (KTS)</h1>
+  <p class="muted">Runs fully in your browser via Pyodide — perfect for Vercel static hosting.</p>
+
+  <div class="row">
+    <section>
+      <h3>1) Participants</h3>
+      <p>Paste names (one per line) or load a <code>.txt</code> file:</p>
+      <textarea id="names"></textarea>
+      <div class="controls">
+        <input type="file" id="fileInput" accept=".txt" />
+        <button id="loadBtn">Load Players</button>
+        <span id="loadStatus" class="muted"></span>
+      </div>
+
+      <h3 style="margin-top:24px;">2) Rounds</h3>
+      <div class="controls">
+        <label>Rounds: <input id="rounds" type="number" min="1" max="12" value="4" /></label>
+        <button id="pairBtn" disabled>Pair Next Round</button>
+        <button id="finalizeBtn" disabled>Finalize Round</button>
+        <span id="roundStatus" class="pill">Round 0/0</span>
+      </div>
+
+      <div id="pairings"></div>
+    </section>
+
+    <section>
+      <h3>Standings</h3>
+      <div id="standings"></div>
+    </section>
+  </div>
+
+  <script>
+    // --- Load Pyodide runtime ---
+    // (Pinned version works well; you can bump later if you like.)
+    const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js";
+    let pyodide, pyReady;
+
+    async function initPy() {
+      self.pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/" });
+      const pyCode = `
+# ---------- Player & Swiss logic (Python) ----------
+from __future__ import annotations
+from typing import List, Optional, Tuple
+import random
+
+class Player:
+    POINTS_WIN = 3
+    POINTS_TIE = 0
+    POINTS_LOSS = 0
+    def __init__(self, name: str):
+        self.name: str = name
+        self.wins: List[object] = []
+        self.losses: List[object] = []
+        self.ties: List[object] = []
+        self.lost_rounds: List[int] = []
+        self.tiebreaker: str = ""
+    # Compatibility helpers
+    def get_points(self) -> int: return self.match_points()
+    def num_wins(self) -> int: return len(self.wins)
+    def num_losses(self) -> int: return len(self.losses)
+    def num_byes(self) -> int: return sum(1 for w in self.wins if w == "BYE")
+    # Stats
+    def match_points(self) -> int:
+        return self.POINTS_WIN*len(self.wins) + self.POINTS_TIE*len(self.ties) + self.POINTS_LOSS*len(self.losses)
+    def matches_played_excl_bye(self) -> int:
+        wins_excl_bye = sum(1 for w in self.wins if w != "BYE")
+        return wins_excl_bye + len(self.losses) + len(self.ties)
+    def wins_excl_bye(self) -> int:
+        return sum(1 for w in self.wins if w != "BYE")
+    def match_win_pct(self) -> float:
+        denom = self.matches_played_excl_bye()
+        return self.wins_excl_bye()/denom if denom else 0.0
+    def opponents(self) -> List["Player"]:
+        opps: List["Player"] = []
+        for x in self.wins:
+            if x != "BYE" and x not in opps: opps.append(x)  # type: ignore
+        for x in self.losses:
+            if x not in opps: opps.append(x)  # type: ignore
+        for x in self.ties:
+            if x not in opps: opps.append(x)  # type: ignore
+        return opps
+
+players: List[Player] = []
+round_num: int = 0
+total_rounds: int = 0
+current_pairs: List[Tuple[Player, Optional[Player]]] = []
+
+def suggested_rounds(n: int) -> int:
+    if n <= 4: return 2
+    if n <= 8: return 3
+    if n <= 16: return 4
+    if n <= 32: return 5
+    if n <= 64: return 6
+    if n <= 128: return 7
+    return 8
+
+def get_win_percentage(p: Player) -> float:
+    wins = p.num_wins() - p.num_byes()
+    losses = p.num_losses()
+    return wins / (wins + losses) if (wins + losses) else 0.0
+
+def get_opponents_win_percentage(p: Player) -> float:
+    num, total = 0, 0.0
+    for opp in p.wins + p.losses:
+        if opp != "BYE":
+            total += get_win_percentage(opp)
+            num += 1
+    return total / num if num else 0.0
+
+def calculate_standings() -> None:
+    for pl in players:
+        pl.tiebreaker = str(pl.get_points())
+        # BBB OMW
+        bbb_val = int(round(get_opponents_win_percentage(pl), 3) * 1000)
+        bbb_val = max(0, min(999, bbb_val))
+        pl.tiebreaker += str(bbb_val).zfill(3)
+        # CCC OOMW
+        num_opps, perc = 0, 0.0
+        for opp in pl.wins + pl.losses:
+            if opp != "BYE":
+                perc += get_opponents_win_percentage(opp)
+                num_opps += 1
+        ccc_val = int(round(perc / num_opps, 3) * 1000) if num_opps else 0
+        ccc_val = max(0, min(999, ccc_val))
+        pl.tiebreaker += str(ccc_val).zfill(3)
+        # DDD sum of squares of lost rounds
+        ddd_val = sum(r*r for r in pl.lost_rounds)
+        ddd_val = min(999, ddd_val)
+        pl.tiebreaker += str(ddd_val).zfill(3)
+
+def check_pairings(pls: List[Player]) -> bool:
+    seen = set()
+    for p in pls:
+        for opp in p.wins + p.losses:
+            if opp == "BYE":
+                continue
+            pair = (min(p.name, opp.name), max(p.name, opp.name))
+            if pair in seen:
+                return False
+            seen.add(pair)
+    return True
+
+def pair_round() -> None:
+    global current_pairs, round_num
+    players.sort(key=lambda x: -x.get_points())
+    local = players[:]
+    # odd: lowest gets BYE (points only)
+    if len(local) % 2 != 0:
+        lowest = local[-1]
+        lowest.wins.append("BYE")
+        local = local[:-1]
+    def weight(pls): return sum(abs(pls[i].get_points() - pls[i+1].get_points()) for i in range(0, len(pls)-1, 2))
+    def loss_fn(pls):
+        pen = weight(pls)
+        for i in range(0, len(pls), 2):
+            if i+1 < len(pls):
+                a, b = pls[i], pls[i+1]
+                if b in a.wins or b in a.losses:
+                    pen += 1000
+        return pen
+    best = list(local)
+    min_loss = loss_fn(local)
+    improved = True
+    while improved:
+        improved = False
+        for _ in range(max(1, len(local))*100):
+            random.shuffle(local)
+            score = loss_fn(local)
+            if score < min_loss and check_pairings(local):
+                min_loss = score
+                best = list(local)
+                improved = True
+                break
+    current_pairs = [(best[i], best[i+1]) for i in range(0, len(best), 2)]
+    round_num += 1
+
+def api_init(names: list[str], rounds: int|None=None) -> dict:
+    global players, round_num, total_rounds, current_pairs
+    players = [Player(n) for n in names]
+    round_num = 0
+    total_rounds = rounds if rounds and rounds>0 else suggested_rounds(len(players))
+    current_pairs = []
+    calculate_standings()
+    return { "round": round_num, "total_rounds": total_rounds }
+
+def api_pair_next() -> list[list[str]]:
+    pair_round()
+    # return [["A","B"], ...] names (BYE never appears as table row here)
+    return [[a.name, b.name] for (a,b) in current_pairs]
+
+def api_finalize(results: list[str]) -> None:
+    # results is a list matching current_pairs: "A"|"B"|"TIE"
+    for i, outcome in enumerate(results):
+        a, b = current_pairs[i]
+        if outcome == "A":
+            a.wins.append(b); b.losses.append(a); b.lost_rounds.append(round_num)
+        elif outcome == "B":
+            b.wins.append(a); a.losses.append(b); a.lost_rounds.append(round_num)
+        elif outcome == "TIE":
+            a.losses.append(b); b.losses.append(a); a.lost_rounds.append(round_num); b.lost_rounds.append(round_num)
+    calculate_standings()
+
+def api_standings() -> list[dict]:
+    calculate_standings()
+    rows = []
+    for p in sorted(players, key=lambda x: -int(x.tiebreaker)):
+        # MW%
+        denom = p.matches_played_excl_bye()
+        mw = (p.wins_excl_bye()/denom*100.0) if denom else 0.0
+        # OMW%
+        omw = get_opponents_win_percentage(p)*100.0
+        # OOMW%
+        num_opps, perc = 0, 0.0
+        for opp in p.wins + p.losses:
+            if opp != "BYE":
+                perc += get_opponents_win_percentage(opp)
+                num_opps += 1
+        oomw = (perc/num_opps*100.0) if num_opps else 0.0
+        ddd = str(sum(r*r for r in p.lost_rounds)).zfill(3)
+        rows.append({
+            "Player": p.name, "Pts": p.get_points(),
+            "MW%": f"{mw:0.1f}", "OMW%": f"{omw:0.1f}", "OOMW%": f"{oomw:0.1f}",
+            "DDD": ddd, "KTS": p.tiebreaker
+        })
+    # add rank
+    for i,r in enumerate(rows, start=1): r["Rank"]=i
+    return rows
+`;
+      await pyodide.runPythonAsync(pyCode);
+    }
+
+    // init on load
+    (async () => {
+      const s = document.createElement("script");
+      s.src = PYODIDE_URL;
+      s.onload = async () => { await initPy(); };
+      document.head.appendChild(s);
+    })();
+
+    // --- DOM helpers ---
+    const el = id => document.getElementById(id);
+    function standingsTable(rows){
+      if (!rows || !rows.length) return "<p class='muted'>No standings yet</p>";
+      let html = "<table><thead><tr><th>Rank</th><th>Player</th><th>Pts</th><th>MW%</th><th>OMW%</th><th>OOMW%</th><th>DDD</th><th>KTS</th></tr></thead><tbody>";
+      for(const r of rows){
+        html += `<tr><td>${r.Rank}</td><td>${r.Player}</td><td>${r.Pts}</td><td>${r["MW%"]}</td><td>${r["OMW%"]}</td><td>${r["OOMW%"]}</td><td>${r.DDD}</td><td>${r.KTS}</td></tr>`;
+      }
+      html += "</tbody></table>";
+      return html;
+    }
+    let currentPairs = []; // [["A","B"], ...]
+    let resultSelects = []; // DOM refs
+
+    function pairingsUI(pairs){
+      if (!pairs || !pairs.length) return "<p class='muted'>No active pairings. Click <b>Pair Next Round</b>.</p>";
+      let html = "";
+      pairs.forEach((p, i) => {
+        html += `
+          <div class="pair-card">
+            <b>Table ${i+1}</b><br/>
+            ${p[0]} vs ${p[1]}<br/>
+            <label><input type="radio" name="t${i}" value="A"> ${p[0]} wins</label>
+            <label><input type="radio" name="t${i}" value="B"> ${p[1]} wins</label>
+            <label><input type="radio" name="t${i}" value="TIE"> Tie</label>
+          </div>
+        `;
+      });
+      return html;
+    }
+
+    async function refreshStandings(){
+      const rows = await pyodide.runPythonAsync("api_standings()");
+      el("standings").innerHTML = standingsTable(rows.toJs());
+    }
+
+    function updateRoundPill(round,total){
+      el("roundStatus").textContent = `Round ${round}/${total}`;
+    }
+
+    // --- wire UI ---
+    el("fileInput").addEventListener("change", async (e)=>{
+      const file = e.target.files?.[0];
+      if(!file) return;
+      const text = await file.text();
+      el("names").value = text;
+    });
+
+    el("loadBtn").addEventListener("click", async ()=>{
+      const names = el("names").value.split("\n").map(s=>s.trim()).filter(Boolean);
+      if(!names.length){ el("loadStatus").textContent = "Add at least one name."; return; }
+      const rounds = parseInt(el("rounds").value,10) || 0;
+      const ret = await pyodide.runPythonAsync(`api_init(${JSON.stringify(names)}, ${rounds})`);
+      const obj = ret.toJs();
+      updateRoundPill(obj.round, obj.total_rounds);
+      el("loadStatus").textContent = `Loaded ${names.length} players.`;
+      el("pairBtn").disabled = false;
+      el("finalizeBtn").disabled = true;
+      el("pairings").innerHTML = "<p class='muted'>Ready to pair.</p>";
+      await refreshStandings();
+    });
+
+    el("pairBtn").addEventListener("click", async ()=>{
+      const pairs = await pyodide.runPythonAsync("api_pair_next()");
+      currentPairs = pairs.toJs();
+      el("pairings").innerHTML = pairingsUI(currentPairs);
+      // capture radios
+      resultSelects = [];
+      currentPairs.forEach((_, i)=>{
+        resultSelects[i] = Array.from(document.querySelectorAll(`input[name="t${i}"]`));
+      });
+      el("pairBtn").disabled = true;
+      el("finalizeBtn").disabled = false;
+      // update round pill (ask Python for latest)
+      const obj = (await pyodide.runPythonAsync("{'r': round_num, 't': total_rounds}")).toJs();
+      updateRoundPill(obj.r, obj.t);
+    });
+
+    el("finalizeBtn").addEventListener("click", async ()=>{
+      // collect results
+      const res = [];
+      for(let i=0;i<currentPairs.length;i++){
+        const sel = resultSelects[i].find(r=>r.checked);
+        if(!sel){ alert(`Please enter result for table ${i+1}.`); return; }
+        res.push(sel.value); // "A"|"B"|"TIE"
+      }
+      await pyodide.runPythonAsync(`api_finalize(${JSON.stringify(res)})`);
+      await refreshStandings();
+      el("pairings").innerHTML = "<p class='ok'>Round finalized. Pair next round when ready.</p>";
+      el("pairBtn").disabled = false;
+      el("finalizeBtn").disabled = true;
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+</body>
+</html>
