@@ -3,14 +3,16 @@ from __future__ import annotations
 import os, json, random, uuid, time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
-
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Edge Config env (lazy-validated) + helpers
+# Edge Config helpers (reads + writes)
 # ──────────────────────────────────────────────────────────────────────────────
+
+EC_ID: Optional[str] = None
+EC_READ_TOKEN: Optional[str] = None
 
 def _parse_edge_config(conn: str) -> tuple[str, str]:
     from urllib.parse import urlparse, parse_qs
@@ -42,12 +44,11 @@ def ec_read_item(key: str):
 
 def ec_patch_items(items: list[dict]) -> None:
     _ensure_edge_ids()
-    # Read tokens *inside* the function so NameError can't happen
+    # Read tokens inside (no NameError if env missing)
     access_token = os.environ.get("VERCEL_ACCESS_TOKEN")
     if not access_token:
         raise RuntimeError("VERCEL_ACCESS_TOKEN env var is missing (Edge Config writes require it).")
     team_id = os.environ.get("VERCEL_TEAM_ID")  # optional
-
     import requests
     url = f"https://api.vercel.com/v1/edge-config/{EC_ID}/items"
     if team_id:
@@ -65,31 +66,36 @@ def ec_patch_items(items: list[dict]) -> None:
             body = r.text
         raise RuntimeError(f"Edge Config write failed ({r.status_code}): {body}")
 
-# Keep parsed IDs here (filled lazily)
-EC_ID: Optional[str] = None
-EC_READ_TOKEN: Optional[str] = None
-
 # ──────────────────────────────────────────────────────────────────────────────
-# Read-after-write helper (mitigate Edge Config propagation delay)
+# Read-after-write helpers (handle Edge Config propagation)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def read_tdoc_or_retry(tid: str, attempts: int = 8, delay: float = 0.25):
-    """
-    Try to read tournament doc several times (total ~2s) to ride out propagation.
-    """
-    key = f"t_{tid}"
-    for i in range(attempts):
+def tid_key(tid: str) -> str: return f"t_{tid}"
+
+def read_tdoc_or_retry(tid: str, attempts: int = 40, delay: float = 0.25):
+    """Try up to ~10s to read the tournament doc (handles eventual consistency)."""
+    key = tid_key(tid)
+    for _ in range(attempts):
         doc = ec_read_item(key)
         if doc is not None:
             return doc
         time.sleep(delay)
     return None
 
+def wait_until_visible(tid: str, attempts: int = 40, delay: float = 0.25):
+    """After a write, block until the read path sees it (up to ~10s)."""
+    key = tid_key(tid)
+    for _ in range(attempts):
+        doc = ec_read_item(key)
+        if doc is not None:
+            return doc
+        time.sleep(delay)
+    raise RuntimeError("Edge Config read path did not see the new item in time")
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Compact tournament doc (Edge Config size friendly)
+# Tournament model + KTS tie-breakers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def tid_key(tid: str) -> str: return f"t_{tid}"
 def new_id(prefix: str) -> str: return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
 @dataclass
@@ -255,8 +261,8 @@ def create_tournament():
                 "players": [{"id": new_id("p"), "name": n} for n in players],
                 "rounds": []}
         ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": tdoc}])
+        _ = wait_until_visible(tid)  # ensure visible before returning
 
-        # Return initial info so UI can enable Pair immediately
         initial_info = {"id": tid, "name": name, "total_rounds": total_rounds, "round": 0}
         return jsonify({"tournament_id": tid, "info": initial_info})
     except Exception as e:
@@ -286,15 +292,12 @@ def api_pair_next(tid):
         t = read_tdoc_or_retry(tid)
         if not t:
             return jsonify({"error":"not found (read-after-write delay)"}), 404
-
         curr = current_round_number(t)
         if curr >= int(t["total_rounds"]):
             return jsonify({"ok": False, "message": "All rounds completed.", "round": curr})
-
         rnd_no, matches = pair_next(t)
         t["rounds"].append({"n": rnd_no, "matches": matches})
         ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": t}])
-
         id2name = {p["id"]: p["name"] for p in t["players"]}
         pairs = [{"table": m["t"], "a": id2name[m["a"]],
                   "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),

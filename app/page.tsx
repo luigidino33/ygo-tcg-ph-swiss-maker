@@ -45,17 +45,13 @@ export default function Page() {
   const [playersText, setPlayersText] = useState("");
   const [name, setName] = useState("BDC Weekly");
   const [rounds, setRounds] = useState(4);
-
-  // match results map: match_id -> "A" | "B" | "TIE"
   const [results, setResults] = useState<Record<string, "A" | "B" | "TIE">>({});
 
-  // Load saved tid
   useEffect(() => {
     const saved = localStorage.getItem("tid");
     if (saved) setTid(saved);
   }, []);
 
-  // Fetch tournament info & standings periodically
   useEffect(() => {
     if (!tid) return;
     const load = async () => {
@@ -74,8 +70,7 @@ export default function Page() {
   }, [tid]);
 
   const canPairMore = useMemo(() => {
-    // be optimistic while info is loading; backend will still enforce the cap
-    if (!info) return true;
+    if (!info) return true; // optimistic; backend enforces cap
     return info.round < info.total_rounds;
   }, [info]);
 
@@ -130,17 +125,33 @@ export default function Page() {
     if (!tid) return;
     setPairing(true);
     try {
-      const data = await fetchJSON(`/api/tournaments/${tid}/pair-next`, { method: "POST" });
+      let data: any = null;
+      let lastErr = "";
+      for (let i = 0; i < 8; i++) { // retry ~6s total
+        try {
+          data = await fetchJSON(`/api/tournaments/${tid}/pair-next`, { method: "POST" });
+          break; // success
+        } catch (e) {
+          const msg = errMsg(e);
+          lastErr = msg;
+          if (msg.includes("read-after-write") || msg.includes("not found")) {
+            await new Promise(res => setTimeout(res, 750));
+            continue;
+          }
+          throw e;
+        }
+      }
+      if (!data) throw new Error(lastErr || "Pairing failed");
+
       if (!data.ok) {
         alert(data.message || "Pairing refused.");
         return;
       }
       setPairs(data.pairs);
       setResults({});
-      // refresh info (round advanced)
+
       const i = await fetchJSON(`/api/tournaments/${tid}`);
       setInfo(i);
-      // BYE gives points immediately; show standings now
       const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
       setStandings(s.standings);
     } catch (e) {
@@ -172,7 +183,6 @@ export default function Page() {
       setStandings(res.standings);
       setPairs([]);
       setResults({});
-      // refresh round count
       const i = await fetchJSON(`/api/tournaments/${tid}`);
       setInfo(i);
     } catch (e) {
@@ -268,9 +278,7 @@ export default function Page() {
                             <input
                               type="radio"
                               name={p.match_id}
-                              onChange={() =>
-                                setResults((r) => ({ ...r, [p.match_id]: "A" }))
-                              }
+                              onChange={() => setResults((r) => ({ ...r, [p.match_id]: "A" }))}
                               checked={results[p.match_id] === "A"}
                             />{" "}
                             {p.a} wins
@@ -279,9 +287,7 @@ export default function Page() {
                             <input
                               type="radio"
                               name={p.match_id}
-                              onChange={() =>
-                                setResults((r) => ({ ...r, [p.match_id]: "B" }))
-                              }
+                              onChange={() => setResults((r) => ({ ...r, [p.match_id]: "B" }))}
                               checked={results[p.match_id] === "B"}
                             />{" "}
                             {p.b} wins
@@ -290,9 +296,7 @@ export default function Page() {
                             <input
                               type="radio"
                               name={p.match_id}
-                              onChange={() =>
-                                setResults((r) => ({ ...r, [p.match_id]: "TIE" }))
-                              }
+                              onChange={() => setResults((r) => ({ ...r, [p.match_id]: "TIE" }))}
                               checked={results[p.match_id] === "TIE"}
                             />{" "}
                             Tie
