@@ -226,7 +226,7 @@ export default function Page() {
                 <textarea
                   value={playersText}
                   onChange={(e) => setPlayersText(e.target.value)}
-                  placeholder="Alice&#10;Bob&#10;Carmen"
+                  placeholder={"Mario\nLuigi\nYoshi"}
                   style={{ width: "100%", height: 160 }}
                 />
               </label>
