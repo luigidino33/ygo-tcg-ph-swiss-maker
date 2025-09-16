@@ -55,7 +55,7 @@
   </div>
 
   <script>
-    // ------- ONE-TIME Pyodide loader with readiness gate -------
+    // ------- ONE-TIME Pyodide loader -------
     const PYODIDE_VERSION = "0.24.1";
     let pyodide;
 
@@ -186,7 +186,7 @@ def pair_round() -> None:
     current_pairs = [(best[i], best[i+1]) for i in range(0,len(best),2)]
     round_num += 1
 
-# ---- NEW: round guards & helpers ----
+# ---- Round guards / API ----
 def api_can_pair() -> bool:
     return round_num < total_rounds
 
@@ -205,7 +205,7 @@ def api_init(names: list[str], rounds: int|None=None) -> dict:
 def api_pair_next() -> list[list[str]]:
     global round_num, total_rounds
     if round_num >= total_rounds:
-        return []  # stop pairing when we hit the cap
+        return []
     pair_round()
     return [[a.name, b.name] for (a,b) in current_pairs]
 
@@ -224,7 +224,7 @@ def api_finalize(results: list[str]) -> None:
 def api_standings() -> list[dict]:
     calculate_standings()
     rows = []
-    for p in sorted(players, key=lambda x: -int(x.tiebreaker)):
+    for p in sorted(players, key=lambda x: -int(p.tiebreaker)):
         denom = p.matches_played_excl_bye()
         mw = (p.wins_excl_bye()/denom*100.0) if denom else 0.0
         omw = get_opponents_win_percentage(p)*100.0
@@ -241,7 +241,7 @@ def api_standings() -> list[dict]:
     return rows
 `;
 
-    // Promise that resolves when Python runtime is fully ready
+    // Load runtime
     const pyReady = (async () => {
       try {
         const s = document.createElement("script");
@@ -259,6 +259,12 @@ def api_standings() -> list[dict]:
       }
     })();
 
+    // ------- Helper: always-convert safely -------
+    async function py(code){
+      const r = await pyodide.runPythonAsync(code);
+      return r && typeof r.toJs === "function" ? r.toJs({ dict_converter: Object.fromEntries }) : r;
+    }
+
     // ------- DOM helpers -------
     const $ = (id) => document.getElementById(id);
 
@@ -275,8 +281,8 @@ def api_standings() -> list[dict]:
     let currentPairs = [];
 
     async function refreshStandings(){
-      const rows = await pyodide.runPythonAsync("api_standings()");
-      $("standings").innerHTML = standingsTable(rows.toJs());
+      const rows = await py("api_standings()");
+      $("standings").innerHTML = standingsTable(rows);
     }
 
     function updateRoundPill(round,total){
@@ -284,8 +290,7 @@ def api_standings() -> list[dict]:
     }
 
     async function updatePairButtonState(){
-      // returns a plain JS boolean, so DO NOT call .toJs()
-      const canPair = await pyodide.runPythonAsync("bool(api_can_pair())");
+      const canPair = await py("api_can_pair()");
       $("pairBtn").disabled = !canPair;
       if (!canPair) {
         $("pairings").innerHTML = "<p class='warn'>All rounds completed. Standings finalized.</p>";
@@ -315,14 +320,13 @@ def api_standings() -> list[dict]:
           const names = $("names").value.split("\n").map(s=>s.trim()).filter(Boolean);
           if(!names.length){ $("loadStatus").textContent = "Add at least one name."; $("loadBtn").disabled = false; return; }
           const rounds = parseInt($("rounds").value,10) || 0;
-          const ret = await pyodide.runPythonAsync(`api_init(${JSON.stringify(names)}, ${rounds})`);
-          const obj = ret.toJs();
+          const obj = await py(`api_init(${JSON.stringify(names)}, ${rounds})`);
           updateRoundPill(obj.round, obj.total_rounds);
           $("loadStatus").textContent = `Loaded ${names.length} players.`;
           $("finalizeBtn").disabled = true;
           $("pairings").innerHTML = "<p class='muted'>Ready to pair.</p>";
-          await refreshStandings();        // <— standings visible immediately
-          await updatePairButtonState();   // <— enable/disable Pair button properly
+          await refreshStandings();        // standings visible immediately
+          await updatePairButtonState();   // enable/disable Pair button properly
         } catch (e) {
           console.error(e);
           $("loadStatus").textContent = "Error: see console";
@@ -336,13 +340,11 @@ def api_standings() -> list[dict]:
         try {
           $("pairBtn").disabled = true;
           $("finalizeBtn").disabled = true;
-          const pairs = await pyodide.runPythonAsync("api_pair_next()");
-          const list = pairs.toJs();
+          const list = await py("api_pair_next()");
           if (!list.length) {
-            // No more rounds allowed
             await refreshStandings();
             await updatePairButtonState();
-            const info = (await pyodide.runPythonAsync("api_round_info()")).toJs();
+            const info = await py("api_round_info()");
             updateRoundPill(info.round, info.total_rounds);
             return;
           }
@@ -361,11 +363,11 @@ def api_standings() -> list[dict]:
           });
           $("pairings").innerHTML = html;
 
-          const info = (await pyodide.runPythonAsync("api_round_info()")).toJs();
+          const info = await py("api_round_info()");
           updateRoundPill(info.round, info.total_rounds);
           $("finalizeBtn").disabled = false;
 
-          await refreshStandings();        // <— also refresh after pairing
+          await refreshStandings();        // refresh after pairing (BYE points apply)
         } catch (e) {
           console.error(e);
           $("loadStatus").textContent = "Pairing failed (see console).";
@@ -382,14 +384,15 @@ def api_standings() -> list[dict]:
           if(!sel){ alert(`Please enter result for table ${i+1}.`); return; }
           res.push(sel.value);
         }
-        await pyodide.runPythonAsync(`api_finalize(${JSON.stringify(res)})`);
+        await py(`api_finalize(${JSON.stringify(res)})`);
         await refreshStandings();
         $("pairings").innerHTML = "<p class='ok'>Round finalized. Pair next round when ready.</p>";
         $("finalizeBtn").disabled = true;
-        await updatePairButtonState();     // <— disable Pair if we hit the cap
+        await updatePairButtonState();     // disable Pair if we hit the cap
+        const info = await py("api_round_info()");
+        updateRoundPill(info.round, info.total_rounds);
       });
     })();
   </script>
 </body>
 </html>
-
