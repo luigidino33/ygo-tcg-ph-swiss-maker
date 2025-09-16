@@ -8,95 +8,75 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Edge Config helpers (reads + writes)
+# Vercel KV (Upstash Redis) via REST
+#   Env:
+#     KV_REST_API_URL   e.g. https://us1-xxxxx.upstash.io
+#     KV_REST_API_TOKEN e.g. <long-bearer-token>
+#   REST semantics:
+#     - SET (string or JSON body): POST {URL}/set/{key}  (Authorization: Bearer <TOKEN>)
+#     - GET:                        GET  {URL}/get/{key}  (returns {"result": "..."} or null)
+#   Docs: Upstash REST API (set/get + bearer) :contentReference[oaicite:0]{index=0}
 # ──────────────────────────────────────────────────────────────────────────────
 
-EC_ID: Optional[str] = None
-EC_READ_TOKEN: Optional[str] = None
+def _kv_url() -> str:
+    url = os.environ.get("KV_REST_API_URL")
+    if not url:
+        raise RuntimeError("KV_REST_API_URL env var is missing.")
+    return url.rstrip("/")
 
-def _parse_edge_config(conn: str) -> tuple[str, str]:
-    from urllib.parse import urlparse, parse_qs
-    u = urlparse(conn)
-    ec_id = u.path.strip("/").split("/")[0]
-    token = parse_qs(u.query).get("token", [None])[0]
-    if not (ec_id and token):
-        raise RuntimeError("EDGE_CONFIG is malformed; expected https://edge-config.vercel.com/<id>?token=<read_token>")
-    return ec_id, token
+def _kv_token() -> str:
+    tok = os.environ.get("KV_REST_API_TOKEN")
+    if not tok:
+        raise RuntimeError("KV_REST_API_TOKEN env var is missing.")
+    return tok
 
-def _ensure_edge_ids():
-    global EC_ID, EC_READ_TOKEN
-    if EC_ID and EC_READ_TOKEN:
-        return
-    conn = os.environ.get("EDGE_CONFIG")
-    if not conn:
-        raise RuntimeError("EDGE_CONFIG env var is missing.")
-    EC_ID, EC_READ_TOKEN = _parse_edge_config(conn)
-
-def ec_read_item(key: str):
-    _ensure_edge_ids()
+def kv_set_json(key: str, value) -> None:
     import requests
-    url = f"https://edge-config.vercel.com/{EC_ID}/item/{key}"
-    r = requests.get(url, headers={"Authorization": f"Bearer {EC_READ_TOKEN}"}, timeout=10)
+    url = f"{_kv_url()}/set/{key}"
+    body = json.dumps(value, separators=(",", ":"))
+    r = requests.post(url, data=body, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+    if r.status_code >= 400:
+        raise RuntimeError(f"KV write failed ({r.status_code}): {r.text}")
+
+def kv_get_json(key: str):
+    import requests
+    url = f"{_kv_url()}/get/{key}"
+    r = requests.get(url, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
     if r.status_code == 404:
         return None
     r.raise_for_status()
-    return r.json().get("value")
-
-def ec_patch_items(items: list[dict]) -> None:
-    _ensure_edge_ids()
-    # Read tokens inside (no NameError if env missing)
-    access_token = os.environ.get("VERCEL_ACCESS_TOKEN")
-    if not access_token:
-        raise RuntimeError("VERCEL_ACCESS_TOKEN env var is missing (Edge Config writes require it).")
-    team_id = os.environ.get("VERCEL_TEAM_ID")  # optional
-    import requests
-    url = f"https://api.vercel.com/v1/edge-config/{EC_ID}/items"
-    if team_id:
-        url += f"?teamId={team_id}"
-    r = requests.patch(
-        url,
-        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-        data=json.dumps({"items": items}),
-        timeout=15,
-    )
-    if r.status_code >= 400:
-        try:
-            body = r.json()
-        except Exception:
-            body = r.text
-        raise RuntimeError(f"Edge Config write failed ({r.status_code}): {body}")
+    data = r.json()
+    val = data.get("result")
+    if val is None:
+        return None
+    # We store JSON strings; parse back
+    try:
+        return json.loads(val)
+    except Exception:
+        return val
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Read-after-write helpers (handle Edge Config propagation)
+# Minimal retry (KV is typically read-after-write consistent, but keep tiny backoff)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def tid_key(tid: str) -> str: return f"t_{tid}"
+def tid_key(tid: str) -> str:
+    return f"t_{tid}"
 
-def read_tdoc_or_retry(tid: str, attempts: int = 40, delay: float = 0.25):
-    """Try up to ~10s to read the tournament doc (handles eventual consistency)."""
+def read_tdoc_or_retry(tid: str, attempts: int = 6, delay: float = 0.2):
     key = tid_key(tid)
     for _ in range(attempts):
-        doc = ec_read_item(key)
+        doc = kv_get_json(key)
         if doc is not None:
             return doc
         time.sleep(delay)
     return None
 
-def wait_until_visible(tid: str, attempts: int = 40, delay: float = 0.25):
-    """After a write, block until the read path sees it (up to ~10s)."""
-    key = tid_key(tid)
-    for _ in range(attempts):
-        doc = ec_read_item(key)
-        if doc is not None:
-            return doc
-        time.sleep(delay)
-    raise RuntimeError("Edge Config read path did not see the new item in time")
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Tournament model + KTS tie-breakers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def new_id(prefix: str) -> str: return f"{prefix}_{uuid.uuid4().hex[:10]}"
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
 @dataclass
 class Node:
@@ -218,31 +198,23 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
 
 @app.get("/api/health")
 def health():
+    """Tiny write+read probe against KV."""
     try:
-        _ensure_edge_ids()
         key = "health_probe"
         payload = {"ts": time.time()}
-        ec_patch_items([{"operation": "upsert", "key": key, "value": payload}])
-        val = ec_read_item(key)
-        return jsonify({"ok": True, "edge_config_id": EC_ID, "read_back": val})
+        kv_set_json(key, payload)
+        val = kv_get_json(key)
+        return jsonify({"ok": True, "kv_url": os.environ.get("KV_REST_API_URL", "")[:32] + "…", "read_back": val})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.get("/api/debug/env")
 def debug_env():
     try:
-        present = {
-            "EDGE_CONFIG_present": bool(os.environ.get("EDGE_CONFIG")),
-            "VERCEL_ACCESS_TOKEN_present": bool(os.environ.get("VERCEL_ACCESS_TOKEN")),
-            "VERCEL_TEAM_ID_present": bool(os.environ.get("VERCEL_TEAM_ID")),
-        }
-        if os.environ.get("EDGE_CONFIG"):
-            try:
-                ec_id, _ = _parse_edge_config(os.environ["EDGE_CONFIG"])
-                present["edge_config_id_prefix"] = ec_id[:8] + "…"
-            except Exception as e:
-                present["edge_config_parse_error"] = str(e)
-        return jsonify(present)
+        return jsonify({
+            "KV_REST_API_URL_present": bool(os.environ.get("KV_REST_API_URL")),
+            "KV_REST_API_TOKEN_present": bool(os.environ.get("KV_REST_API_TOKEN")),
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -260,8 +232,7 @@ def create_tournament():
         tdoc = {"name": name, "total_rounds": total_rounds,
                 "players": [{"id": new_id("p"), "name": n} for n in players],
                 "rounds": []}
-        ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": tdoc}])
-        _ = wait_until_visible(tid)  # ensure visible before returning
+        kv_set_json(tid_key(tid), tdoc)
 
         initial_info = {"id": tid, "name": name, "total_rounds": total_rounds, "round": 0}
         return jsonify({"tournament_id": tid, "info": initial_info})
@@ -291,13 +262,13 @@ def api_pair_next(tid):
     try:
         t = read_tdoc_or_retry(tid)
         if not t:
-            return jsonify({"error":"not found (read-after-write delay)"}), 404
+            return jsonify({"error":"not found"}), 404
         curr = current_round_number(t)
         if curr >= int(t["total_rounds"]):
             return jsonify({"ok": False, "message": "All rounds completed.", "round": curr})
         rnd_no, matches = pair_next(t)
         t["rounds"].append({"n": rnd_no, "matches": matches})
-        ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": t}])
+        kv_set_json(tid_key(tid), t)
         id2name = {p["id"]: p["name"] for p in t["players"]}
         pairs = [{"table": m["t"], "a": id2name[m["a"]],
                   "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
@@ -322,7 +293,7 @@ def api_finalize_round(tid):
             mid = r.get("match_id"); out = r.get("outcome")
             if mid in by_id and out in ("A","B","TIE"):
                 by_id[mid]["r"] = out
-        ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": t}])
+        kv_set_json(tid_key(tid), t)
         return jsonify({"ok": True, "standings": compute_standings(t)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
