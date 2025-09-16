@@ -224,7 +224,8 @@ def api_finalize(results: list[str]) -> None:
 def api_standings() -> list[dict]:
     calculate_standings()
     rows = []
-    for p in sorted(players, key=lambda x: -int(p.tiebreaker)):
+    # FIX: sort by x.tiebreaker (not p.tiebreaker)
+    for p in sorted(players, key=lambda x: -int(x.tiebreaker)):
         denom = p.matches_played_excl_bye()
         mw = (p.wins_excl_bye()/denom*100.0) if denom else 0.0
         omw = get_opponents_win_percentage(p)*100.0
@@ -235,10 +236,19 @@ def api_standings() -> list[dict]:
                 num_opps += 1
         oomw = (perc/num_opps*100.0) if num_opps else 0.0
         ddd = str(sum(r*r for r in p.lost_rounds)).zfill(3)
-        rows.append({"Player": p.name, "Pts": p.get_points(), "MW%": f"{mw:0.1f}",
-                     "OMW%": f"{omw:0.1f}", "OOMW%": f"{oomw:0.1f}", "DDD": ddd, "KTS": p.tiebreaker})
-    for i,r in enumerate(rows, start=1): r["Rank"]=i
+        rows.append({
+            "Player": p.name,
+            "Pts": p.get_points(),
+            "MW%": f"{mw:0.1f}",
+            "OMW%": f"{omw:0.1f}",
+            "OOMW%": f"{oomw:0.1f}",
+            "DDD": ddd,
+            "KTS": p.tiebreaker
+        })
+    for i, r in enumerate(rows, start=1):
+        r["Rank"] = i
     return rows
+
 `;
 
     // Load runtime
@@ -396,3 +406,4 @@ def api_standings() -> list[dict]:
   </script>
 </body>
 </html>
+
