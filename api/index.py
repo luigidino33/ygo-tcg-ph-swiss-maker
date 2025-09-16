@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 EDGE_CONFIG_CONN = os.environ.get("EDGE_CONFIG")            # https://edge-config.vercel.com/<id>?token=<read_token>
 VERCEL_ACCESS_TOKEN = os.environ.get("VERCEL_ACCESS_TOKEN") # required for writes
-VERCEL_TEAM_ID = os.environ.get("VERCEL_TEAM_ID")           # optional (team-scoped EC)
+#VERCEL_TEAM_ID = os.environ.get("VERCEL_TEAM_ID")           # optional (team-scoped EC)
 
 EC_ID: Optional[str] = None
 EC_READ_TOKEN: Optional[str] = None
@@ -236,6 +236,7 @@ def create_tournament():
         players = [p.strip() for p in (data.get("players") or []) if p.strip()]
         if not players:
             return jsonify({"error": "players list is required"}), 400
+
         tid = uuid.uuid4().hex[:10]
         tdoc = {
             "name": name,
@@ -244,9 +245,13 @@ def create_tournament():
             "rounds": []
         }
         ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": tdoc}])
-        return jsonify({"tournament_id": tid})
+
+        # NEW: return initial info so the UI can enable the Pair button immediately
+        initial_info = {"id": tid, "name": name, "total_rounds": total_rounds, "round": 0}
+        return jsonify({"tournament_id": tid, "info": initial_info})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.get("/api/tournaments/<tid>")
 def get_tournament(tid):

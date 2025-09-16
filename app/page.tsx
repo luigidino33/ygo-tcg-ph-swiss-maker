@@ -68,37 +68,43 @@ export default function Page() {
   }, [tid]);
 
   const canPairMore = useMemo(() => {
-    if (!info) return false;
-    return info.round < info.total_rounds;
-  }, [info]);
+  // Be optimistic during the split second while info is loading after create
+  if (!info) return true;
+  return info.round < info.total_rounds;
+}, [info]);
+
 
   const createTournament = async () => {
-    setCreating(true);
-    try {
-      const players = playersText
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (!players.length) {
-        alert("Add at least one player (one per line).");
-        return;
-      }
-      const data = await fetchJSON(`/api/tournaments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, total_rounds: rounds, players }),
-      });
-      localStorage.setItem("tid", data.tournament_id);
-      setTid(data.tournament_id);
-      setPairs([]);
-      setResults({});
-    } catch (e) {
-      console.error(e);
-      alert("Failed to create tournament.");
-    } finally {
-      setCreating(false);
+  setCreating(true);
+  try {
+    const players = playersText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!players.length) {
+      alert("Add at least one player (one per line).");
+      return;
     }
-  };
+    const data = await fetchJSON(`/api/tournaments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, total_rounds: rounds, players }),
+    });
+
+    // Save and immediately prime UI with initial info
+    localStorage.setItem("tid", data.tournament_id);
+    setTid(data.tournament_id);
+    if (data.info) setInfo(data.info); // <— enables Pair button right away
+
+    setPairs([]);
+    setResults({});
+  } catch (e: any) {
+    console.error(e);
+    alert(`Failed to create tournament: ${e.message}`);
+  } finally {
+    setCreating(false);
+  }
+};
 
   const loadExisting = async () => {
     const t = prompt("Enter tournament_id:");
