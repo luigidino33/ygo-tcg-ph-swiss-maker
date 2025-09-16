@@ -17,9 +17,16 @@ type TournamentInfo = { id: string; name: string; total_rounds: number; round: n
 
 const fetchJSON = async (url: string, init?: RequestInit) => {
   const res = await fetch(url, { ...init, cache: "no-store" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  const text = await res.text();
+  let data: any = undefined;
+  try { data = text ? JSON.parse(text) : undefined; } catch {}
+  if (!res.ok) {
+    const msg = data?.error || data?.message || text || `${res.status} ${res.statusText}`;
+    throw new Error(msg);
+  }
+  return data;
 };
+
 
 export default function Page() {
   const [tid, setTid] = useState<string | null>(null);
