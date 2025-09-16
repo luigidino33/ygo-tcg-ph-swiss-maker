@@ -143,7 +143,7 @@ export default function Page() {
       setStandings(s.standings);
     } catch (e) {
       console.error(e);
-      alert("Failed to pair.");
+      alert(`Failed to pair: ${e.message}`);
     } finally {
       setPairing(false);
     }

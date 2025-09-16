@@ -12,13 +12,6 @@ app = Flask(__name__)
 # Edge Config env (lazy-validated) + helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-EDGE_CONFIG_CONN = os.environ.get("EDGE_CONFIG")            # https://edge-config.vercel.com/<id>?token=<read_token>
-VERCEL_ACCESS_TOKEN = os.environ.get("VERCEL_ACCESS_TOKEN") # required for writes
-VERCEL_TEAM_ID = os.environ.get("VERCEL_TEAM_ID")           # optional (team-scoped EC)
-
-EC_ID: Optional[str] = None
-EC_READ_TOKEN: Optional[str] = None
-
 def _parse_edge_config(conn: str) -> tuple[str, str]:
     from urllib.parse import urlparse, parse_qs
     u = urlparse(conn)
@@ -32,9 +25,10 @@ def _ensure_edge_ids():
     global EC_ID, EC_READ_TOKEN
     if EC_ID and EC_READ_TOKEN:
         return
-    if not EDGE_CONFIG_CONN:
+    conn = os.environ.get("EDGE_CONFIG")
+    if not conn:
         raise RuntimeError("EDGE_CONFIG env var is missing.")
-    EC_ID, EC_READ_TOKEN = _parse_edge_config(EDGE_CONFIG_CONN)
+    EC_ID, EC_READ_TOKEN = _parse_edge_config(conn)
 
 def ec_read_item(key: str):
     _ensure_edge_ids()
@@ -48,26 +42,48 @@ def ec_read_item(key: str):
 
 def ec_patch_items(items: list[dict]) -> None:
     _ensure_edge_ids()
-    if not VERCEL_ACCESS_TOKEN:
+    # Read tokens *inside* the function so NameError can't happen
+    access_token = os.environ.get("VERCEL_ACCESS_TOKEN")
+    if not access_token:
         raise RuntimeError("VERCEL_ACCESS_TOKEN env var is missing (Edge Config writes require it).")
+    team_id = os.environ.get("VERCEL_TEAM_ID")  # optional
+
     import requests
     url = f"https://api.vercel.com/v1/edge-config/{EC_ID}/items"
-    if VERCEL_TEAM_ID:
-        url += f"?teamId={VERCEL_TEAM_ID}"
+    if team_id:
+        url += f"?teamId={team_id}"
     r = requests.patch(
         url,
-        headers={"Authorization": f"Bearer {VERCEL_ACCESS_TOKEN}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
         data=json.dumps({"items": items}),
         timeout=15,
     )
-    # Surface the exact error body (403, 401, etc.)
     if r.status_code >= 400:
-        # Try to include API error JSON if present
         try:
             body = r.json()
         except Exception:
             body = r.text
         raise RuntimeError(f"Edge Config write failed ({r.status_code}): {body}")
+
+# Keep parsed IDs here (filled lazily)
+EC_ID: Optional[str] = None
+EC_READ_TOKEN: Optional[str] = None
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Read-after-write helper (mitigate Edge Config propagation delay)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def read_tdoc_or_retry(tid: str, attempts: int = 8, delay: float = 0.25):
+    """
+    Try to read tournament doc several times (total ~2s) to ride out propagation.
+    """
+    key = f"t_{tid}"
+    for i in range(attempts):
+        doc = ec_read_item(key)
+        if doc is not None:
+            return doc
+        time.sleep(delay)
+    return None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Compact tournament doc (Edge Config size friendly)
@@ -133,8 +149,8 @@ def compute_standings(t: dict):
         ccc = max(0, min(999, int(round((acc/nopp) if nopp else 0.0, 3) * 1000)))
         ddd = min(999, sum(r*r for r in p.lost_rounds))
         kts = f"{aa}{str(bbb).zfill(3)}{str(ccc).zfill(3)}{str(ddd).zfill(3)}"
-        denom = p.matches_played_excl_bye()
-        mw = (p.wins_excl_bye()/denom*100.0) if denom else 0.0
+        d = p.matches_played_excl_bye()
+        mw = (p.wins_excl_bye()/d*100.0) if d else 0.0
         omw = opp_win_pct(p)*100.0
         oomw = (acc/nopp*100.0) if nopp else 0.0
         rows.append({"player_id": p.id, "player": p.name, "pts": aa,
@@ -196,7 +212,6 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
 
 @app.get("/api/health")
 def health():
-    """Read/write probe (does a tiny upsert+read)."""
     try:
         _ensure_edge_ids()
         key = "health_probe"
@@ -209,17 +224,15 @@ def health():
 
 @app.get("/api/debug/env")
 def debug_env():
-    """Safe env presence check (does not leak tokens)."""
     try:
         present = {
-            "EDGE_CONFIG_present": bool(EDGE_CONFIG_CONN),
-            "VERCEL_ACCESS_TOKEN_present": bool(VERCEL_ACCESS_TOKEN),
-            "VERCEL_TEAM_ID_present": bool(VERCEL_TEAM_ID),
+            "EDGE_CONFIG_present": bool(os.environ.get("EDGE_CONFIG")),
+            "VERCEL_ACCESS_TOKEN_present": bool(os.environ.get("VERCEL_ACCESS_TOKEN")),
+            "VERCEL_TEAM_ID_present": bool(os.environ.get("VERCEL_TEAM_ID")),
         }
-        # if EDGE_CONFIG present, show derived id prefix (non-secret)
-        if EDGE_CONFIG_CONN:
+        if os.environ.get("EDGE_CONFIG"):
             try:
-                ec_id, _ = _parse_edge_config(EDGE_CONFIG_CONN)
+                ec_id, _ = _parse_edge_config(os.environ["EDGE_CONFIG"])
                 present["edge_config_id_prefix"] = ec_id[:8] + "…"
             except Exception as e:
                 present["edge_config_parse_error"] = str(e)
@@ -238,25 +251,21 @@ def create_tournament():
             return jsonify({"error": "players list is required"}), 400
 
         tid = uuid.uuid4().hex[:10]
-        tdoc = {
-            "name": name,
-            "total_rounds": total_rounds,
-            "players": [{"id": new_id("p"), "name": n} for n in players],
-            "rounds": []
-        }
+        tdoc = {"name": name, "total_rounds": total_rounds,
+                "players": [{"id": new_id("p"), "name": n} for n in players],
+                "rounds": []}
         ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": tdoc}])
 
-        # NEW: return initial info so the UI can enable the Pair button immediately
+        # Return initial info so UI can enable Pair immediately
         initial_info = {"id": tid, "name": name, "total_rounds": total_rounds, "round": 0}
         return jsonify({"tournament_id": tid, "info": initial_info})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.get("/api/tournaments/<tid>")
 def get_tournament(tid):
     try:
-        t = ec_read_item(tid_key(tid))
+        t = read_tdoc_or_retry(tid)
         if not t: return jsonify({"error":"not found"}), 404
         return jsonify({"id": tid, "name": t["name"], "total_rounds": t["total_rounds"], "round": current_round_number(t)})
     except Exception as e:
@@ -265,7 +274,7 @@ def get_tournament(tid):
 @app.get("/api/tournaments/<tid>/standings")
 def api_standings(tid):
     try:
-        t = ec_read_item(tid_key(tid))
+        t = read_tdoc_or_retry(tid)
         if not t: return jsonify({"error":"not found"}), 404
         return jsonify({"standings": compute_standings(t)})
     except Exception as e:
@@ -274,16 +283,22 @@ def api_standings(tid):
 @app.post("/api/tournaments/<tid>/pair-next")
 def api_pair_next(tid):
     try:
-        t = ec_read_item(tid_key(tid))
-        if not t: return jsonify({"error":"not found"}), 404
+        t = read_tdoc_or_retry(tid)
+        if not t:
+            return jsonify({"error":"not found (read-after-write delay)"}), 404
+
         curr = current_round_number(t)
         if curr >= int(t["total_rounds"]):
             return jsonify({"ok": False, "message": "All rounds completed.", "round": curr})
+
         rnd_no, matches = pair_next(t)
         t["rounds"].append({"n": rnd_no, "matches": matches})
         ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": t}])
+
         id2name = {p["id"]: p["name"] for p in t["players"]}
-        pairs = [{"table": m["t"], "a": id2name[m["a"]], "b": (id2name.get(m["b"]) if m.get("b") else "BYE"), "match_id": m["id"]} for m in matches]
+        pairs = [{"table": m["t"], "a": id2name[m["a"]],
+                  "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
+                  "match_id": m["id"]} for m in matches]
         return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -295,14 +310,15 @@ def api_finalize_round(tid):
         results = data.get("results") or []
         if not isinstance(results, list) or not results:
             return jsonify({"error": "results array required"}), 400
-        t = ec_read_item(tid_key(tid))
+        t = read_tdoc_or_retry(tid)
         if not t: return jsonify({"error":"not found"}), 404
         if not t.get("rounds"): return jsonify({"error":"no rounds to finalize"}), 400
         last = t["rounds"][-1]
         by_id = {m["id"]: m for m in last["matches"]}
         for r in results:
             mid = r.get("match_id"); out = r.get("outcome")
-            if mid in by_id and out in ("A","B","TIE"): by_id[mid]["r"] = out
+            if mid in by_id and out in ("A","B","TIE"):
+                by_id[mid]["r"] = out
         ec_patch_items([{"operation": "upsert", "key": tid_key(tid), "value": t}])
         return jsonify({"ok": True, "standings": compute_standings(t)})
     except Exception as e:
