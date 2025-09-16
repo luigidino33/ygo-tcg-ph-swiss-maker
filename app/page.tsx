@@ -70,9 +70,10 @@ export default function Page() {
   }, [tid]);
 
   const canPairMore = useMemo(() => {
-    if (!info) return true; // optimistic; backend enforces cap
-    return info.round < info.total_rounds;
-  }, [info]);
+  if (!info) return false; // wait for info; prevents accidental double-pair
+  return info.round < info.total_rounds && pairs.length === 0;
+}, [info, pairs.length]);
+
 
   const createTournament = async () => {
     setCreating(true);
@@ -122,7 +123,11 @@ export default function Page() {
   };
 
   const pairNext = async () => {
-    if (!tid) return;
+      if (!tid) return;
+  if (pairs.length > 0) {
+    alert('Finish the current round first. Click "Finalize Round".');
+    return;
+  }
     setPairing(true);
     try {
       let data: any = null;
@@ -195,7 +200,7 @@ export default function Page() {
 
   return (
     <main>
-      <h1>🃏 BDC Swiss — Admin</h1>
+      <h1>🃏 YGO TCG PH - KTS Swiss</h1>
 
       {!tid ? (
         <>
@@ -250,9 +255,9 @@ export default function Page() {
               </p>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={pairNext} disabled={!canPairMore || pairing}>
-                {pairing ? "Pairing..." : "Pair Next Round"}
-              </button>
+		<button onClick={pairNext} disabled={!canPairMore || pairing}>
+  			{pairing ? "Pairing..." : "Pair Next Round"}
+		</button>
               <button onClick={finalizeRound} disabled={!pairs.length || finalizing}>
                 {finalizing ? "Finalizing..." : "Finalize Round"}
               </button>
