@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>YGO TCG PH Swiss (KTS Tie-breakers)</title>
+  <title>BDC Swiss (KTS Tie-breakers)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
@@ -23,7 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>🃏 YGO TCG PH Swiss (KTS Tie-breakers)</h1>
+  <h1>🃏 Bayanihan Duelist Circuit — Swiss (KTS)</h1>
+  <p class="muted">Runs fully in your browser via Pyodide — perfect for Vercel static hosting.</p>
 
   <div class="row">
     <section>
@@ -185,6 +186,13 @@ def pair_round() -> None:
     current_pairs = [(best[i], best[i+1]) for i in range(0,len(best),2)]
     round_num += 1
 
+# ---- NEW: round guards & helpers ----
+def api_can_pair() -> bool:
+    return round_num < total_rounds
+
+def api_round_info() -> dict:
+    return {"round": round_num, "total_rounds": total_rounds}
+
 def api_init(names: list[str], rounds: int|None=None) -> dict:
     global players, round_num, total_rounds, current_pairs
     players = [Player(n) for n in names]
@@ -192,9 +200,12 @@ def api_init(names: list[str], rounds: int|None=None) -> dict:
     total_rounds = rounds if rounds and rounds>0 else suggested_rounds(len(players))
     current_pairs = []
     calculate_standings()
-    return { "round": round_num, "total_rounds": total_rounds }
+    return {"round": round_num, "total_rounds": total_rounds}
 
 def api_pair_next() -> list[list[str]]:
+    global round_num, total_rounds
+    if round_num >= total_rounds:
+        return []  # stop pairing when we hit the cap
     pair_round()
     return [[a.name, b.name] for (a,b) in current_pairs]
 
@@ -233,12 +244,10 @@ def api_standings() -> list[dict]:
     // Promise that resolves when Python runtime is fully ready
     const pyReady = (async () => {
       try {
-        // load loader
         const s = document.createElement("script");
         s.src = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/pyodide.js`;
         document.head.appendChild(s);
         await new Promise((res, rej) => { s.onload = res; s.onerror = rej; });
-        // init runtime + preload code
         pyodide = await loadPyodide({ indexURL: `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/` });
         await pyodide.runPythonAsync(pyCode);
         return true;
@@ -264,23 +273,6 @@ def api_standings() -> list[dict]:
     }
 
     let currentPairs = [];
-    let resultSelects = [];
-
-    function pairingsUI(pairs){
-      if (!pairs || !pairs.length) return "<p class='muted'>No active pairings. Click <b>Pair Next Round</b>.</p>";
-      let html = "";
-      pairs.forEach((p, i) => {
-        html += `
-          <div class="pair-card">
-            <b>Table ${i+1}</b><br/>
-            ${p[0]} vs ${p[1]}<br/>
-            <label><input type="radio" name="t${i}" value="A"> ${p[0]} wins</label>
-            <label><input type="radio" name="t${i}" value="B"> ${p[1]} wins</label>
-            <label><input type="radio" name="t${i}" value="TIE"> Tie</label>
-          </div>`;
-      });
-      return html;
-    }
 
     async function refreshStandings(){
       const rows = await pyodide.runPythonAsync("api_standings()");
@@ -289,6 +281,14 @@ def api_standings() -> list[dict]:
 
     function updateRoundPill(round,total){
       $("roundStatus").textContent = `Round ${round}/${total}`;
+    }
+
+    async function updatePairButtonState(){
+      const canPair = (await pyodide.runPythonAsync("api_can_pair()")).toJs();
+      $("pairBtn").disabled = !canPair;
+      if (!canPair) {
+        $("pairings").innerHTML = "<p class='warn'>All rounds completed. Standings finalized.</p>";
+      }
     }
 
     // ------- Wire up UI once runtime is ready -------
@@ -318,10 +318,10 @@ def api_standings() -> list[dict]:
           const obj = ret.toJs();
           updateRoundPill(obj.round, obj.total_rounds);
           $("loadStatus").textContent = `Loaded ${names.length} players.`;
-          $("pairBtn").disabled = false;
           $("finalizeBtn").disabled = true;
           $("pairings").innerHTML = "<p class='muted'>Ready to pair.</p>";
-          await refreshStandings();
+          await refreshStandings();        // <— standings visible immediately
+          await updatePairButtonState();   // <— enable/disable Pair button properly
         } catch (e) {
           console.error(e);
           $("loadStatus").textContent = "Error: see console";
@@ -336,15 +336,35 @@ def api_standings() -> list[dict]:
           $("pairBtn").disabled = true;
           $("finalizeBtn").disabled = true;
           const pairs = await pyodide.runPythonAsync("api_pair_next()");
-          currentPairs = pairs.toJs();
-          $("pairings").innerHTML = pairingsUI(currentPairs);
-          resultSelects = [];
-          currentPairs.forEach((_, i)=>{
-            resultSelects[i] = Array.from(document.querySelectorAll(`input[name="t${i}"]`));
+          const list = pairs.toJs();
+          if (!list.length) {
+            // No more rounds allowed
+            await refreshStandings();
+            await updatePairButtonState();
+            const info = (await pyodide.runPythonAsync("api_round_info()")).toJs();
+            updateRoundPill(info.round, info.total_rounds);
+            return;
+          }
+          currentPairs = list;
+          // render pairs
+          let html = "";
+          list.forEach((p, i) => {
+            html += `
+              <div class="pair-card">
+                <b>Table ${i+1}</b><br/>
+                ${p[0]} vs ${p[1]}<br/>
+                <label><input type="radio" name="t${i}" value="A"> ${p[0]} wins</label>
+                <label><input type="radio" name="t${i}" value="B"> ${p[1]} wins</label>
+                <label><input type="radio" name="t${i}" value="TIE"> Tie</label>
+              </div>`;
           });
-          const obj = (await pyodide.runPythonAsync("{'r': round_num, 't': total_rounds}")).toJs();
-          updateRoundPill(obj.r, obj.t);
+          $("pairings").innerHTML = html;
+
+          const info = (await pyodide.runPythonAsync("api_round_info()")).toJs();
+          updateRoundPill(info.round, info.total_rounds);
           $("finalizeBtn").disabled = false;
+
+          await refreshStandings();        // <— also refresh after pairing
         } catch (e) {
           console.error(e);
           $("loadStatus").textContent = "Pairing failed (see console).";
@@ -364,8 +384,8 @@ def api_standings() -> list[dict]:
         await pyodide.runPythonAsync(`api_finalize(${JSON.stringify(res)})`);
         await refreshStandings();
         $("pairings").innerHTML = "<p class='ok'>Round finalized. Pair next round when ready.</p>";
-        $("pairBtn").disabled = false;
         $("finalizeBtn").disabled = true;
+        await updatePairButtonState();     // <— disable Pair if we hit the cap
       });
     })();
   </script>
