@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 EDGE_CONFIG_CONN = os.environ.get("EDGE_CONFIG")            # https://edge-config.vercel.com/<id>?token=<read_token>
 VERCEL_ACCESS_TOKEN = os.environ.get("VERCEL_ACCESS_TOKEN") # required for writes
-#VERCEL_TEAM_ID = os.environ.get("VERCEL_TEAM_ID")           # optional (team-scoped EC)
+VERCEL_TEAM_ID = os.environ.get("VERCEL_TEAM_ID")           # optional (team-scoped EC)
 
 EC_ID: Optional[str] = None
 EC_READ_TOKEN: Optional[str] = None
