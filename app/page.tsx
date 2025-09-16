@@ -15,6 +15,13 @@ type StandRow = {
 };
 type TournamentInfo = { id: string; name: string; total_rounds: number; round: number };
 
+// Helper: extract a readable message from unknown errors
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
 const fetchJSON = async (url: string, init?: RequestInit) => {
   const res = await fetch(url, { ...init, cache: "no-store" });
   const text = await res.text();
@@ -26,7 +33,6 @@ const fetchJSON = async (url: string, init?: RequestInit) => {
   }
   return data;
 };
-
 
 export default function Page() {
   const [tid, setTid] = useState<string | null>(null);
@@ -68,43 +74,39 @@ export default function Page() {
   }, [tid]);
 
   const canPairMore = useMemo(() => {
-  // Be optimistic during the split second while info is loading after create
-  if (!info) return true;
-  return info.round < info.total_rounds;
-}, [info]);
-
+    // be optimistic while info is loading; backend will still enforce the cap
+    if (!info) return true;
+    return info.round < info.total_rounds;
+  }, [info]);
 
   const createTournament = async () => {
-  setCreating(true);
-  try {
-    const players = playersText
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!players.length) {
-      alert("Add at least one player (one per line).");
-      return;
+    setCreating(true);
+    try {
+      const players = playersText
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!players.length) {
+        alert("Add at least one player (one per line).");
+        return;
+      }
+      const data = await fetchJSON(`/api/tournaments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, total_rounds: rounds, players }),
+      });
+      localStorage.setItem("tid", data.tournament_id);
+      setTid(data.tournament_id);
+      if (data.info) setInfo(data.info); // enable Pair immediately
+      setPairs([]);
+      setResults({});
+    } catch (e) {
+      console.error(e);
+      alert(`Failed to create tournament: ${errMsg(e)}`);
+    } finally {
+      setCreating(false);
     }
-    const data = await fetchJSON(`/api/tournaments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, total_rounds: rounds, players }),
-    });
-
-    // Save and immediately prime UI with initial info
-    localStorage.setItem("tid", data.tournament_id);
-    setTid(data.tournament_id);
-    if (data.info) setInfo(data.info); // <— enables Pair button right away
-
-    setPairs([]);
-    setResults({});
-  } catch (e: any) {
-    console.error(e);
-    alert(`Failed to create tournament: ${e.message}`);
-  } finally {
-    setCreating(false);
-  }
-};
+  };
 
   const loadExisting = async () => {
     const t = prompt("Enter tournament_id:");
@@ -143,7 +145,7 @@ export default function Page() {
       setStandings(s.standings);
     } catch (e) {
       console.error(e);
-      alert(`Failed to pair: ${e.message}`);
+      alert(`Failed to pair: ${errMsg(e)}`);
     } finally {
       setPairing(false);
     }
@@ -151,7 +153,6 @@ export default function Page() {
 
   const finalizeRound = async () => {
     if (!tid) return;
-    // Build payload: skip BYE matches
     const payload = {
       results: pairs
         .filter((p) => p.b !== "BYE")
@@ -176,7 +177,7 @@ export default function Page() {
       setInfo(i);
     } catch (e) {
       console.error(e);
-      alert("Finalize failed.");
+      alert(`Finalize failed: ${errMsg(e)}`);
     } finally {
       setFinalizing(false);
     }
