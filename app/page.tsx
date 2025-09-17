@@ -36,8 +36,8 @@ const fetchJSON = async (url: string, init?: RequestInit) => {
 
 export default function Page() {
   const [tid, setTid] = useState<string | null>(null);
-  const [info, setInfo] = useState<TournamentInfo | null>(null);
-  const [pairs, setPairs] = useState<Pair[]>([]);
+  const [pairs, setPairs] = useState<Pair[]>([]);       // already have this
+  const [info, setInfo] = useState<TournamentInfo|null>(null);
   const [standings, setStandings] = useState<StandRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [pairing, setPairing] = useState(false);
@@ -52,25 +52,30 @@ export default function Page() {
     if (saved) setTid(saved);
   }, []);
 
-  useEffect(() => {
-    if (!tid) return;
-    const load = async () => {
-      try {
-        const i = await fetchJSON(`/api/tournaments/${tid}`);
-        setInfo(i);
-        const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
-        setStandings(s.standings);
-      } catch (e) {
-        console.error(e);
-      }
-    };
-    load();
-    const id = setInterval(load, 10000);
-    return () => clearInterval(id);
-  }, [tid]);
+useEffect(() => {
+  if (!tid) return;
+  const load = async () => {
+    try {
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
+      setStandings(s.standings);
+      // NEW: fetch active pairings so refresh preserves current round
+      const a = await fetchJSON(`/api/tournaments/${tid}/active`);
+      setPairs(a.pairs || []);
+      // reset any stale selections if the server says no active round
+      if (!a.pairs || a.pairs.length === 0) setResults({});
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  load();
+  const id = setInterval(load, 10000);
+  return () => clearInterval(id);
+}, [tid]);
 
-  const canPairMore = useMemo(() => {
-  if (!info) return false; // wait for info; prevents accidental double-pair
+const canPairMore = useMemo(() => {
+  if (!info) return false;                 // wait for server info
   return info.round < info.total_rounds && pairs.length === 0;
 }, [info, pairs.length]);
 
@@ -124,10 +129,10 @@ export default function Page() {
 
   const pairNext = async () => {
       if (!tid) return;
-  if (pairs.length > 0) {
-    alert('Finish the current round first. Click "Finalize Round".');
-    return;
-  }
+if (pairs.length > 0) {
+  alert('Finish the current round first. Click "Finalize Round".');
+  return;
+}
     setPairing(true);
     try {
       let data: any = null;
