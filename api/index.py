@@ -193,6 +193,33 @@ def prior_pairs_set(t: dict) -> set[tuple[str, str]]:
                 pairs.add((a, b) if a < b else (b, a))
     return pairs
 
+
+
+def _bye_already_from_rounds(t: dict) -> set[str]:
+    s: set[str] = set()
+    for rnd in t.get("rounds", []):
+        for m in rnd.get("matches", []):
+            if m.get("r") == "BYE" or (m.get("b") in (None, "BYE")):
+                if m.get("a"):
+                    s.add(m["a"])
+    return s
+
+def _bye_history_get(t: dict) -> set[str]:
+    arr = t.get("bye_history") or []
+    try:
+        return set(arr)
+    except Exception:
+        return set()
+
+def _bye_history_add(t: dict, player_id: str) -> None:
+    if not player_id:
+        return
+    arr = t.get("bye_history")
+    if not isinstance(arr, list):
+        arr = []
+        t["bye_history"] = arr
+    if player_id not in arr:
+        arr.append(player_id)
 def pairs_for_ui(t: dict) -> list[dict]:
     """Return active pairs (PENDING + BYE) of latest round for refresh-safe UI."""
     last = latest_round(t)
