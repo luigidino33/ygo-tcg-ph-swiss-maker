@@ -193,33 +193,6 @@ def prior_pairs_set(t: dict) -> set[tuple[str, str]]:
                 pairs.add((a, b) if a < b else (b, a))
     return pairs
 
-
-
-def _bye_already_from_rounds(t: dict) -> set[str]:
-    s: set[str] = set()
-    for rnd in t.get("rounds", []):
-        for m in rnd.get("matches", []):
-            if m.get("r") == "BYE" or (m.get("b") in (None, "BYE")):
-                if m.get("a"):
-                    s.add(m["a"])
-    return s
-
-def _bye_history_get(t: dict) -> set[str]:
-    arr = t.get("bye_history") or []
-    try:
-        return set(arr)
-    except Exception:
-        return set()
-
-def _bye_history_add(t: dict, player_id: str) -> None:
-    if not player_id:
-        return
-    arr = t.get("bye_history")
-    if not isinstance(arr, list):
-        arr = []
-        t["bye_history"] = arr
-    if player_id not in arr:
-        arr.append(player_id)
 def pairs_for_ui(t: dict) -> list[dict]:
     """Return active pairs (PENDING + BYE) of latest round for refresh-safe UI."""
     last = latest_round(t)
@@ -277,37 +250,45 @@ def _build_brackets(ids: list[str], pts_by_id: dict, kts_by_id: dict, id2name: d
         brackets.append(bucket)
     return brackets
 
-def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) -> None | list[tuple[str, str]]:
+def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) -> Optional[list[tuple[str, str]]]:
     """
-    Backtracking with adjacency bias (1v2,3v4,...) while avoiding rematches.
-    No rematch fallback here — caller (_pair_brackets) handles reorders/borrows.
+    Backtracking: preserve adjacency bias (1v2,3v4,...) while avoiding rematches.
     """
     n = len(order)
-    if n == 0:
-        return []
     used = [False] * n
     pairs: list[tuple[str, str]] = []
+
     prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
 
-    def bt(i: int) -> bool:
+    def bt(start_idx: int) -> bool:
+        # find next free i
+        i = start_idx
         while i < n and used[i]:
             i += 1
         if i >= n:
             return True
         used[i] = True
-        ai = order[i]
-
+        # Prefer partners close to i to approximate 1v2,3v4
         for j in range(i + 1, n):
             if used[j]:
                 continue
-            aj = order[j]
-            if ai == aj:
-                continue  # self-pair hard guard
-            key = (ai, aj) if ai < aj else (aj, ai)
+            a, b = order[i], order[j]
+            key = (a, b) if a < b else (b, a)
             if key in prior_lookup:
-                continue
+                continue  # avoid rematch if possible
             used[j] = True
-            pairs.append((ai, aj))
+            pairs.append((a, b))
+            if bt(i + 1):
+                return True
+            pairs.pop()
+            used[j] = False
+        # If no non-rematch partner works, allow rematch as last resort
+        for j in range(i + 1, n):
+            if used[j]:
+                continue
+            a, b = order[i], order[j]
+            used[j] = True
+            pairs.append((a, b))
             if bt(i + 1):
                 return True
             pairs.pop()
@@ -318,261 +299,43 @@ def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) ->
     ok = bt(0)
     return pairs if ok else None
 
-
-def _pair_brackets(
-    brackets: list[list[str]],
-    prior_pairs: set[tuple[str, str]],
-    bye_already: set[str] | None = None,   # optional; pass a set() of players who already had BYE
-) -> list[tuple[str, str]]:
+def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]]) -> list[tuple[str, str]]:
     """
-    Swiss pairing with:
-      - BYE to true last place, avoiding players who've already had a BYE
-      - Strong no-repeat preference (reorders + one cross-bracket float)
-      - No self-pairs; de-dup input and final validation with global repair fallback
+    Pair each bracket top-down. If a bracket is odd, float the lowest to the next bracket.
+    If pairing fails due to rematches, float the lowest and retry.
     """
-    import random
-
-    bye_already = bye_already or set()
-
-    # --- Preselect BYE (odd total): scan last bracket tail -> head, skipping prior-BYE players
-    total_players = sum(len(b) for b in brackets)
-    bye_player: str | None = None
-    if total_players % 2 == 1:
-        chosen = None
-        for k in range(len(brackets) - 1, -1, -1):
-            if not brackets[k]:
-                continue
-            for idx in range(len(brackets[k]) - 1, -1, -1):
-                cand = brackets[k][idx]
-                if cand not in bye_already:
-                    chosen = (k, idx, cand)
-                    break
-            if chosen:
-                break
-        if chosen is None:
-            # everyone already had a BYE; give it to strict last-place tail
-            for k in range(len(brackets) - 1, -1, -1):
-                if brackets[k]:
-                    chosen = (k, len(brackets[k]) - 1, brackets[k][-1])
-                    break
-        if chosen:
-            k, idx, cand = chosen
-            bye_player = cand
-            del brackets[k][idx]
-
-    def _dedupe(seq: list[str]) -> list[str]:
-        seen = set()
-        out = []
-        for x in seq:
-            if x in seen:
-                continue
-            seen.add(x)
-            out.append(x)
-        return out
-
-    def try_orderings(base: list[str]) -> list[list[str]]:
-        # a handful of deterministic local permutations to break deadlocks
-        base = _dedupe(base)  # IMPORTANT: remove duplicate IDs in this working set
-        variants = [base[:]]
-        n = len(base)
-        if n >= 4:
-            v = base[:]; v[-1], v[-2] = v[-2], v[-1]; variants.append(v)
-            v = base[:]; v[1], v[2] = v[2], v[1]; variants.append(v)
-            v = base[:]; v = v[::2] + v[1::2]; variants.append(v)
-        if n >= 6:
-            v = base[:]; v[2], v[5] = v[5], v[2]; variants.append(v)
-        rnd = random.Random(n * 911)  # deterministic per size
-        v = base[:]; rnd.shuffle(v); variants.append(v)
-        out, seen = [], set()
-        for arr in variants:
-            t = tuple(arr)
-            if t not in seen:
-                seen.add(t); out.append(arr)
-        return out
-
     pairs: list[tuple[str, str]] = []
     carry_down: list[str] = []
 
-    def pair_bucket(work: list[str]) -> None | list[tuple[str, str]]:
-        work = _dedupe(work)  # de-duplicate within the working list
-        for cand in try_orderings(work):
-            res = _pair_within_bracket(cand, prior_pairs)
-            if res is not None:
-                # sanitize any accidental self-pair (belt-and-suspenders)
-                res = [(a, b) for (a, b) in res if a != b]
-                return res
-        return None
-
-    for idx, bucket in enumerate(brackets):
+    for bucket in brackets:
         work = (carry_down + bucket) if carry_down else list(bucket)
-        carry_down = []
 
-        work = _dedupe(work)  # de-duplicate again after merge
-
-        if not work:
+        if len(work) == 0:
+            carry_down = []
             continue
 
-        # keep even; float lowest to next bracket if needed
+        # If odd, float the lowest (last) down
         if len(work) % 2 == 1:
             carry_down = [work.pop()]
-
-        # 1) attempt no-repeat pairing with local reorders
-        res = pair_bucket(work)
-
-        # 2) if impossible, borrow ONE from next bracket and try again
-        if res is None and idx + 1 < len(brackets):
-            next_bucket = list(brackets[idx + 1])
-            if next_bucket:
-                candidate = next_bucket.pop(0)
-                work2 = work + ([candidate] if candidate not in work else [])
-                if len(work2) % 2 == 1:
-                    carry_down = [work2.pop()] + carry_down
-                res = pair_bucket(work2)
-                if res is not None:
-                    pairs.extend(res)
-                    brackets[idx + 1] = next_bucket
-                    continue
-
-        if res is not None:
-            pairs.extend(res)
-            continue
-
-        # 3) LAST resort: minimal repeats greedy (still no self-pair)
-        used = [False] * len(work)
-        chosen: list[tuple[str, str]] = []
-        prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
-
-        def greedy_pair():
-            for i in range(len(work)):
-                if used[i]: continue
-                used[i] = True
-                best_j = None
-                for j in range(i + 1, len(work)):
-                    if used[j]: continue
-                    a, b = work[i], work[j]
-                    if a == b:
-                        continue
-                    key = (a, b) if a < b else (b, a)
-                    if key not in prior_lookup:
-                        used[j] = True
-                        chosen.append((a, b))
-                        break
-                    if best_j is None:
-                        best_j = j
-                else:
-                    if best_j is not None:
-                        j = best_j
-                        used[j] = True
-                        a, b = work[i], work[j]
-                        if a != b:
-                            chosen.append((a, b))
-                    else:
-                        return False
-            return True
-
-        ok = greedy_pair()
-        if not ok:
-            carry_down = work + carry_down
         else:
-            pairs.extend(chosen)
+            carry_down = []
 
-    # Append BYE chosen above
-    if bye_player is not None:
-        pairs.append((bye_player, "BYE"))
+        # Try to pair; if impossible, float one more and retry
+        while True:
+            res = _pair_within_bracket(work, prior_pairs)
+            if res is not None:
+                pairs.extend(res)
+                break
+            if not work:
+                break
+            # float one more lowest to keep feasibility
+            carry_down = [work.pop()] + carry_down
+            if len(work) % 2 == 1:
+                if work:
+                    carry_down = [work.pop()] + carry_down
 
-    # --- Final validation ---
-    def _valid(ps: list[tuple[str, str]]) -> bool:
-        seen_once = set()
-        for a, b in ps:
-            if a == b:
-                return False
-            if b == "BYE":
-                if a in seen_once:
-                    return False
-                seen_once.add(a)
-                continue
-            if a in seen_once or b in seen_once:
-                return False
-            seen_once.add(a); seen_once.add(b)
-        return True
-
-    if _valid(pairs):
-        return pairs
-
-    # Emergency repair: global no-rematch backtracking across the whole round
-    pool = []
-    for a, b in pairs:
-        if b == "BYE":
-            continue
-        pool.extend([a, b])
-    pool = _dedupe(pool)
-
-    def _global_backtrack(order: list[str]) -> None | list[tuple[str, str]]:
-        n = len(order)
-        used = [False] * n
-        result: list[tuple[str, str]] = []
-        prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
-
-        def bt(i: int) -> bool:
-            while i < n and used[i]:
-                i += 1
-            if i >= n:
-                return True
-            used[i] = True
-            ai = order[i]
-            for j in range(i + 1, n):
-                if used[j]: continue
-                aj = order[j]
-                if ai == aj: continue
-                key = (ai, aj) if ai < aj else (aj, ai)
-                if key in prior_lookup:  # try to avoid repeats globally
-                    continue
-                used[j] = True
-                result.append((ai, aj))
-                if bt(i + 1):
-                    return True
-                result.pop()
-                used[j] = False
-            used[i] = False
-            return False
-
-        return result if bt(0) else None
-
-    # Try a few deterministic permutations before giving up
-    for seed in (123, 321, 777, 991):
-        rnd = random.Random(seed)
-        cand = pool[:]; rnd.shuffle(cand)
-        rebuilt = _global_backtrack(cand)
-        if rebuilt:
-            # keep the same BYE if present
-            if bye_player is not None:
-                rebuilt.append((bye_player, "BYE"))
-            if _valid(rebuilt):
-                return rebuilt
-
-    # If still not valid (extremely unlikely), last-sanitize: remove any self-pairs and dup edges
-    final = []
-    seen_edges = set()
-    used_players = set()
-    for a, b in pairs:
-        if a == b:
-            continue
-        if b == "BYE":
-            if a in used_players:
-                continue
-            used_players.add(a)
-            final.append((a, b))
-            continue
-        if a in used_players or b in used_players:
-            continue
-        key = (a, b) if a < b else (b, a)
-        if key in seen_edges:
-            continue
-        seen_edges.add(key)
-        used_players.add(a); used_players.add(b)
-        final.append((a, b))
-    return final
-
+    # If overall players were odd, carry_down may hold one player, but BYE is handled separately.
+    return pairs
 
 def pair_next(t: dict) -> tuple[int, list[dict]]:
     """
@@ -608,30 +371,6 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
 
     return rnd_no, matches
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Restart current round (clear & re-pair same round)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def restart_current_round_doc(t: dict) -> tuple[int, list[dict]] | tuple[None, str]:
-    """
-    Pop the latest (active) round and regenerate its pairings using current rules.
-    Returns (round_no, matches) on success, or (None, error_message) on failure.
-    """
-    # Must have at least one round and it must still be active (has PENDING/ BYE)
-    last = latest_round(t)
-    if not last:
-        return None, "no round to restart"
-    # If round is fully finalized, do not restart
-    if not round_has_pending(last):
-        return None, "round already finalized"
-
-    # Remove the active round completely to avoid counting its pairs as 'prior'
-    t["rounds"].pop()
-
-    # Re-pair the same round number via pair_next (which computes n = current + 1)
-    rnd_no, matches = pair_next(t)
-    return rnd_no, matches
 # ──────────────────────────────────────────────────────────────────────────────
 # Routes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -716,6 +455,70 @@ def get_tournament(tid):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
+@app.post("/api/tournaments/<tid>/edit-result")
+def api_edit_result(tid):
+    """
+    Admin: edit a single match result in any round.
+    Body: { "match_id": "<id>", "result": "A"|"B"|"DRAW"|"PENDING"|"BYE" }
+      - For BYE matches, 'b' should be None and result "BYE".
+      - For non-BYE matches, 'r' is one of: "A", "B", "DRAW", "PENDING".
+    Saves and returns {ok: true, round: n, match: {...}}.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        mid = body.get("match_id")
+        res = body.get("result")
+        if not mid or res not in {"A", "B", "DRAW", "PENDING", "BYE"}:
+            return jsonify({"ok": False, "message": "Provide match_id and valid result."}), 400
+
+        t = read_tdoc_or_retry(tid)
+        if not t:
+            return jsonify({"error": "not found"}), 404
+
+        found = None
+        found_round = None
+        for rd in t.get("rounds", []):
+            for m in rd.get("matches", []):
+                if m.get("id") == mid:
+                    found = m
+                    found_round = rd.get("n")
+                    break
+            if found:
+                break
+
+        if not found:
+            return jsonify({"ok": False, "message": "Match not found."}), 404
+
+        # Validate BYE vs non-BYE transitions
+        if res == "BYE":
+            # Make it a BYE: ensure opponent None and mark as BYE
+            found["b"] = None
+            found["r"] = "BYE"
+        else:
+            # Not a BYE — ensure it's a real pairing (if originally BYE, cannot assign a winner without opponent)
+            if found.get("b") in (None, "BYE"):
+                # leave as BYE if no opponent; admin must restart/re-pair to change structure
+                return jsonify({"ok": False, "message": "Cannot set result on BYE match without an opponent."}), 400
+            found["r"] = res  # "A" | "B" | "DRAW" | "PENDING"
+
+        # Persist document
+        kv_set_json(tid_key(tid), t)
+
+        # Return sanitized match info (names for UI)
+        id2name = {p["id"]: p["name"] for p in t.get("players", []) if "id" in p and "name" in p}
+        rsp = {
+            "id": found.get("id"),
+            "t": found.get("t"),
+            "a": id2name.get(found.get("a"), found.get("a")),
+            "b": ("BYE" if found.get("b") in (None, "BYE") else id2name.get(found.get("b"), found.get("b"))),
+            "r": found.get("r"),
+        }
+        return jsonify({"ok": True, "round": found_round, "match": rsp})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.get("/api/tournaments/<tid>/standings")
 def api_standings(tid):
     try:
@@ -768,107 +571,6 @@ def api_pair_next(tid):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
-@app.post("/api/tournaments/<tid>/restart-round")
-def api_restart_round(tid):
-    """
-    Pop the current (active) round and regenerate pairings for the same round.
-    Keeps players and past rounds intact.
-    """
-    try:
-        t = read_tdoc_or_retry(tid)
-        if not t:
-            return jsonify({"error": "not found"}), 404
-
-        # Validate we have an active (unfinalized) round to restart
-        last = latest_round(t)
-        if not last:
-            return jsonify({"ok": False, "message": "No round to restart."}), 400
-        if not round_has_pending(last):
-            return jsonify({"ok": False, "message": "Round already finalized; cannot restart."}), 400
-
-        # Perform restart
-        out = restart_current_round_doc(t)
-        if isinstance(out, tuple) and out[0] is None:
-            # Error path
-            return jsonify({"ok": False, "message": out[1]}), 400
-
-        rnd_no, matches = out
-
-        # Persist updated tournament
-        t["rounds"].append({"n": rnd_no, "matches": matches})
-        kv_set_json(tid_key(tid), t)
-
-        id2name = {p["id"]: p["name"] for p in t["players"]}
-        pairs = [{
-            "table": m["t"],
-            "a": id2name[m["a"]],
-            "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
-            "match_id": m["id"]
-        } for m in matches]
-
-        return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-
-@app.post("/api/tournaments/<tid>/override-pair")
-def api_override_pair(tid):
-    """
-    Force a specific table matchup, then re-run solver for the remaining players.
-    Body accepts either IDs or names:
-      { "a": "<player_id>", "b": "<player_id>" }
-      or
-      { "a_name": "Alice", "b_name": "Bob" }
-    If an active round exists, this will POP it and rebuild the same round with the locked table.
-    """
-    try:
-        body = request.get_json(silent=True) or {}
-        a = body.get("a"); b = body.get("b")
-        a_name = body.get("a_name"); b_name = body.get("b_name")
-
-        t = read_tdoc_or_retry(tid)
-        if not t:
-            return jsonify({"error": "not found"}), 404
-
-        # Resolve names to IDs if provided
-        id_by_name = {p["name"]: p["id"] for p in t.get("players", []) if "id" in p and "name" in p}
-        if (not a or not b) and (a_name and b_name):
-            a = id_by_name.get(a_name)
-            b = id_by_name.get(b_name)
-
-        if not a or not b:
-            return jsonify({"ok": False, "message": "Provide 'a' and 'b' (IDs) or 'a_name' and 'b_name'."}), 400
-        if a == b:
-            return jsonify({"ok": False, "message": "Cannot pair a player with themselves."}), 400
-
-        # If there is an active round, pop it so we re-pair the same round
-        last = latest_round(t)
-        if last and round_has_pending(last):
-            t["rounds"].pop()
-
-        # Build new round with the locked pair
-        rnd_no, matches = pair_next_with_overrides(t, [(a, b)])
-
-        # Persist
-        t["rounds"].append({"n": rnd_no, "matches": matches})
-        kv_set_json(tid_key(tid), t)
-
-        # Return UI-friendly pairs (names)
-        id2name = {p["id"]: p["name"] for p in t["players"]}
-        pairs = [{
-            "table": m["t"],
-            "a": id2name.get(m["a"], m["a"]),
-            "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
-            "match_id": m["id"]
-        } for m in matches]
-
-        return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.post("/api/tournaments/<tid>/finalize-round")
 def api_finalize_round(tid):
     """
@@ -899,86 +601,3 @@ def api_finalize_round(tid):
         return jsonify({"ok": True, "standings": compute_standings(t)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Manual override: force specific matchup, then re-run solver for the rest
-# ──────────────────────────────────────────────────────────────────────────────
-def pair_next_with_overrides(t: dict, locked_pairs: list[tuple[str, str]]) -> tuple[int, list[dict]]:
-    """
-    Like pair_next, but 'locked_pairs' are pre-assigned into the round.
-    Each tuple is (player_id_A, player_id_B). These two will be removed from
-    the pool, and the solver will pair the remaining players with the usual rules
-    (no self-pair, minimize repeats, last-place BYE; avoids repeat BYEs if helpers present).
-    """
-    nodes, pts_by_id, kts_by_id, id2name = _standings_maps(t)
-    prior = prior_pairs_set(t)
-
-    # Dedup player IDs
-    seen = set()
-    all_ids = []
-    for p in t["players"]:
-        pid = p["id"]
-        if pid not in seen:
-            seen.add(pid)
-            all_ids.append(pid)
-
-    # Remove locked players from pool and sanitize locked pairs
-    locked_flat = set()
-    sanitized_locked: list[tuple[str, str]] = []
-    for a, b in locked_pairs:
-        if not a or not b or a == b:
-            continue
-        if a in seen and b in seen and a not in locked_flat and b not in locked_flat:
-            locked_flat.add(a); locked_flat.add(b)
-            sanitized_locked.append((a, b))
-
-    remaining = [pid for pid in all_ids if pid not in locked_flat]
-
-    # Prepare brackets for remaining players
-    brackets = _build_brackets(remaining, pts_by_id, kts_by_id, id2name)
-
-    # BYE avoid-set: from saved rounds + persistent bye_history if available
-    try:
-        bye_seen_rounds = _bye_already_from_rounds(t)
-    except NameError:
-        bye_seen_rounds = set()
-    try:
-        bye_history = _bye_history_get(t)
-    except NameError:
-        bye_history = set()
-    bye_already = bye_seen_rounds | bye_history
-
-    # Solve for remaining players (includes possible BYE)
-    id_pairs_rest = _pair_brackets(brackets, prior, bye_already=bye_already)
-
-    # Build final list: locked first, then the rest
-    rnd_no = current_round_number(t) + 1
-    matches: list[dict] = []
-    table = 1
-
-    # Locked matches at the top
-    for a, b in sanitized_locked:
-        matches.append({"id": new_id("m"), "t": table, "a": a, "b": b, "r": "PENDING"})
-        table += 1
-
-    # Remaining matches (may include BYE)
-    bye_recipient = None
-    for a, b in id_pairs_rest:
-        if b == "BYE":
-            bye_recipient = a
-            matches.append({"id": new_id("m"), "t": table, "a": a, "b": None, "r": "BYE"})
-        else:
-            matches.append({"id": new_id("m"), "t": table, "a": a, "b": b, "r": "PENDING"})
-        table += 1
-
-    # Persist BYE immediately if persistent BYE history is enabled
-    try:
-        if bye_recipient:
-            _bye_history_add(t, bye_recipient)
-    except NameError:
-        pass
-
-    return rnd_no, matches

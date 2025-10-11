@@ -40,7 +40,13 @@ export default function Page() {
   const [info, setInfo] = useState<TournamentInfo|null>(null);
   const [standings, setStandings] = useState<StandRow[]>([]);
   const [creating, setCreating] = useState(false);
-  const [pairing, setPairing] = useState(false);
+  
+// Admin edit result panel
+const [showEdit, setShowEdit] = useState(false);
+const [editMatchId, setEditMatchId] = useState<string>("");
+const [editResult, setEditResult] = useState<string>("PENDING");
+
+const [pairing, setPairing] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [playersText, setPlayersText] = useState("");
   const [name, setName] = useState("BDC Weekly");
@@ -203,6 +209,40 @@ if (pairs.length > 0) {
     }
   };
 
+
+const editResultSave = async () => {
+  if (!tid || !editMatchId) return;
+  try {
+    const res = await fetchJSON(`/api/tournaments/${tid}/edit-result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ match_id: editMatchId, result: editResult }),
+    });
+    if (!res.ok) throw new Error(res.message || "Edit failed");
+    // Refresh standings and tournament info; pairs remain structurally same for current round
+    const i = await fetchJSON(`/api/tournaments/${tid}`);
+    setInfo(i);
+    const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
+    setStandings(s.standings);
+    setShowEdit(false);
+    setEditMatchId("");
+    setEditResult("PENDING");
+    alert("✅ Result updated and standings reflowed.");
+  } catch (e) {
+    console.error(e);
+    alert(`Edit failed: ${errMsg(e)}`);
+  }
+};
+
+const matchOptions = useMemo(() => {
+  try {
+    return (pairs || []).map((m:any) => ({
+      id: m.match_id || m.id,
+      label: `Table ${m.table}: ${m.a} vs ${m.b}`
+    }));
+  } catch { return []; }
+}, [pairs]);
+
   return (
     <main>
       <h1>🃏 YGO TCG PH - KTS Swiss</h1>
@@ -244,6 +284,38 @@ if (pairs.length > 0) {
                 </button>
               </div>
             </div>
+
+{showEdit && (
+  <div style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 12 }}>
+    <div style={{ fontWeight: 600, marginBottom: 8 }}>Edit a Result</div>
+    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+      <div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>Table</div>
+        <select value={editMatchId} onChange={(e) => setEditMatchId(e.target.value)}>
+          <option value="">— select —</option>
+          {matchOptions.map((m:any) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>Result</div>
+        <select value={editResult} onChange={(e) => setEditResult(e.target.value)}>
+          <option value="PENDING">PENDING</option>
+          <option value="A">A wins</option>
+          <option value="B">B wins</option>
+          <option value="DRAW">DRAW</option>
+          <option value="BYE">BYE</option>
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={editResultSave} disabled={!editMatchId}>Save</button>
+        <button onClick={() => { setShowEdit(false); setEditMatchId(''); setEditResult('PENDING'); }}>Cancel</button>
+      </div>
+    </div>
+  </div>
+)}
+
           </section>
         </>
       ) : (
