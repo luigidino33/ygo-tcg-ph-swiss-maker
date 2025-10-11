@@ -283,7 +283,7 @@ const matchOptions = useMemo(() => {
                   Load existing by ID
                 </button>
               </div>
-            
+
 {showEdit && (
   <div style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 12 }}>
     <div style={{ fontWeight: 600, marginBottom: 8 }}>Edit a Result</div>
