@@ -581,6 +581,30 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
 
     return rnd_no, matches
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Restart current round (clear & re-pair same round)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def restart_current_round_doc(t: dict) -> tuple[int, list[dict]] | tuple[None, str]:
+    """
+    Pop the latest (active) round and regenerate its pairings using current rules.
+    Returns (round_no, matches) on success, or (None, error_message) on failure.
+    """
+    # Must have at least one round and it must still be active (has PENDING/ BYE)
+    last = latest_round(t)
+    if not last:
+        return None, "no round to restart"
+    # If round is fully finalized, do not restart
+    if not round_has_pending(last):
+        return None, "round already finalized"
+
+    # Remove the active round completely to avoid counting its pairs as 'prior'
+    t["rounds"].pop()
+
+    # Re-pair the same round number via pair_next (which computes n = current + 1)
+    rnd_no, matches = pair_next(t)
+    return rnd_no, matches
 # ──────────────────────────────────────────────────────────────────────────────
 # Routes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -713,6 +737,50 @@ def api_pair_next(tid):
             "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
             "match_id": m["id"]
         } for m in matches]
+        return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.post("/api/tournaments/<tid>/restart-round")
+def api_restart_round(tid):
+    """
+    Pop the current (active) round and regenerate pairings for the same round.
+    Keeps players and past rounds intact.
+    """
+    try:
+        t = read_tdoc_or_retry(tid)
+        if not t:
+            return jsonify({"error": "not found"}), 404
+
+        # Validate we have an active (unfinalized) round to restart
+        last = latest_round(t)
+        if not last:
+            return jsonify({"ok": False, "message": "No round to restart."}), 400
+        if not round_has_pending(last):
+            return jsonify({"ok": False, "message": "Round already finalized; cannot restart."}), 400
+
+        # Perform restart
+        out = restart_current_round_doc(t)
+        if isinstance(out, tuple) and out[0] is None:
+            # Error path
+            return jsonify({"ok": False, "message": out[1]}), 400
+
+        rnd_no, matches = out
+
+        # Persist updated tournament
+        t["rounds"].append({"n": rnd_no, "matches": matches})
+        kv_set_json(tid_key(tid), t)
+
+        id2name = {p["id"]: p["name"] for p in t["players"]}
+        pairs = [{
+            "table": m["t"],
+            "a": id2name[m["a"]],
+            "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
+            "match_id": m["id"]
+        } for m in matches]
+
         return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
