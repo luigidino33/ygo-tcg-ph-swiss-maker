@@ -203,6 +203,33 @@ if (pairs.length > 0) {
     }
   };
 
+
+const overridePair = async () => {
+  if (!tid) return;
+  const a = prompt("Lock player A (name or id):");
+  const b = prompt("Lock player B (name or id):");
+  if (!a || !b) return;
+  if (!confirm(`Force ${a} vs ${b} and re-pair the rest?`)) return;
+  try {
+    const res = await fetchJSON(`/api/tournaments/${tid}/override-pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a_name: a, b_name: b, a, b }),
+    });
+    if (!res.ok && !res.pairs) throw new Error(res.message || "Override failed");
+    setPairs(res.pairs || []);
+    setResults({});
+    const i = await fetchJSON(`/api/tournaments/${tid}`);
+    setInfo(i);
+    const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
+    setStandings(s.standings);
+    alert("✅ Locked table created and remaining pairings refreshed.");
+  } catch (e) {
+    console.error(e);
+    alert(`Override failed: ${errMsg(e)}`);
+  }
+};
+
   return (
     <main>
       <h1>🃏 YGO TCG PH - KTS Swiss</h1>
@@ -288,7 +315,9 @@ if (pairs.length > 0) {
     style={{ background: "#fef6e4", border: "1px solid #f2b705", color: "#000" }}
     disabled={!pairs.length}
   >
-    🔁 Restart Pairings
+    🔁 Restart Pairings</button>
+  <button onClick={overridePair} disabled={!tid || pairs.length === 0}>
+    🔒 Lock a Table & Re-Pair
   </button>
 </div>
 

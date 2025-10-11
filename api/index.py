@@ -812,6 +812,63 @@ def api_restart_round(tid):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
+@app.post("/api/tournaments/<tid>/override-pair")
+def api_override_pair(tid):
+    """
+    Force a specific table matchup, then re-run solver for the remaining players.
+    Body accepts either IDs or names:
+      { "a": "<player_id>", "b": "<player_id>" }
+      or
+      { "a_name": "Alice", "b_name": "Bob" }
+    If an active round exists, this will POP it and rebuild the same round with the locked table.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        a = body.get("a"); b = body.get("b")
+        a_name = body.get("a_name"); b_name = body.get("b_name")
+
+        t = read_tdoc_or_retry(tid)
+        if not t:
+            return jsonify({"error": "not found"}), 404
+
+        # Resolve names to IDs if provided
+        id_by_name = {p["name"]: p["id"] for p in t.get("players", []) if "id" in p and "name" in p}
+        if (not a or not b) and (a_name and b_name):
+            a = id_by_name.get(a_name)
+            b = id_by_name.get(b_name)
+
+        if not a or not b:
+            return jsonify({"ok": False, "message": "Provide 'a' and 'b' (IDs) or 'a_name' and 'b_name'."}), 400
+        if a == b:
+            return jsonify({"ok": False, "message": "Cannot pair a player with themselves."}), 400
+
+        # If there is an active round, pop it so we re-pair the same round
+        last = latest_round(t)
+        if last and round_has_pending(last):
+            t["rounds"].pop()
+
+        # Build new round with the locked pair
+        rnd_no, matches = pair_next_with_overrides(t, [(a, b)])
+
+        # Persist
+        t["rounds"].append({"n": rnd_no, "matches": matches})
+        kv_set_json(tid_key(tid), t)
+
+        # Return UI-friendly pairs (names)
+        id2name = {p["id"]: p["name"] for p in t["players"]}
+        pairs = [{
+            "table": m["t"],
+            "a": id2name.get(m["a"], m["a"]),
+            "b": (id2name.get(m["b"]) if m.get("b") else "BYE"),
+            "match_id": m["id"]
+        } for m in matches]
+
+        return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.post("/api/tournaments/<tid>/finalize-round")
 def api_finalize_round(tid):
     """
@@ -844,3 +901,84 @@ def api_finalize_round(tid):
         return jsonify({"error": str(e)}), 500
 
 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Manual override: force specific matchup, then re-run solver for the rest
+# ──────────────────────────────────────────────────────────────────────────────
+def pair_next_with_overrides(t: dict, locked_pairs: list[tuple[str, str]]) -> tuple[int, list[dict]]:
+    """
+    Like pair_next, but 'locked_pairs' are pre-assigned into the round.
+    Each tuple is (player_id_A, player_id_B). These two will be removed from
+    the pool, and the solver will pair the remaining players with the usual rules
+    (no self-pair, minimize repeats, last-place BYE; avoids repeat BYEs if helpers present).
+    """
+    nodes, pts_by_id, kts_by_id, id2name = _standings_maps(t)
+    prior = prior_pairs_set(t)
+
+    # Dedup player IDs
+    seen = set()
+    all_ids = []
+    for p in t["players"]:
+        pid = p["id"]
+        if pid not in seen:
+            seen.add(pid)
+            all_ids.append(pid)
+
+    # Remove locked players from pool and sanitize locked pairs
+    locked_flat = set()
+    sanitized_locked: list[tuple[str, str]] = []
+    for a, b in locked_pairs:
+        if not a or not b or a == b:
+            continue
+        if a in seen and b in seen and a not in locked_flat and b not in locked_flat:
+            locked_flat.add(a); locked_flat.add(b)
+            sanitized_locked.append((a, b))
+
+    remaining = [pid for pid in all_ids if pid not in locked_flat]
+
+    # Prepare brackets for remaining players
+    brackets = _build_brackets(remaining, pts_by_id, kts_by_id, id2name)
+
+    # BYE avoid-set: from saved rounds + persistent bye_history if available
+    try:
+        bye_seen_rounds = _bye_already_from_rounds(t)
+    except NameError:
+        bye_seen_rounds = set()
+    try:
+        bye_history = _bye_history_get(t)
+    except NameError:
+        bye_history = set()
+    bye_already = bye_seen_rounds | bye_history
+
+    # Solve for remaining players (includes possible BYE)
+    id_pairs_rest = _pair_brackets(brackets, prior, bye_already=bye_already)
+
+    # Build final list: locked first, then the rest
+    rnd_no = current_round_number(t) + 1
+    matches: list[dict] = []
+    table = 1
+
+    # Locked matches at the top
+    for a, b in sanitized_locked:
+        matches.append({"id": new_id("m"), "t": table, "a": a, "b": b, "r": "PENDING"})
+        table += 1
+
+    # Remaining matches (may include BYE)
+    bye_recipient = None
+    for a, b in id_pairs_rest:
+        if b == "BYE":
+            bye_recipient = a
+            matches.append({"id": new_id("m"), "t": table, "a": a, "b": None, "r": "BYE"})
+        else:
+            matches.append({"id": new_id("m"), "t": table, "a": a, "b": b, "r": "PENDING"})
+        table += 1
+
+    # Persist BYE immediately if persistent BYE history is enabled
+    try:
+        if bye_recipient:
+            _bye_history_add(t, bye_recipient)
+    except NameError:
+        pass
+
+    return rnd_no, matches
