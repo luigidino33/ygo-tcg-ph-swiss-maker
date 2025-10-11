@@ -537,3 +537,169 @@ def api_finalize_round(tid):
         return jsonify({"ok": True, "standings": compute_standings(t)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# --- Added override: _pair_within_bracket (no-rematch backtracking) ---
+
+def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) -> None | list[tuple[str, str]]:
+    """
+    Backtracking with adjacency bias (1v2,3v4,...) while avoiding rematches.
+    NO rematch fallback here — caller (_pair_brackets) will try alternative
+    reorders/carry strategies before allowing any rematch.
+    """
+    n = len(order)
+    if n == 0:
+        return []
+    used = [False] * n
+    pairs: list[tuple[str, str]] = []
+    prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
+
+    def bt(start_idx: int) -> bool:
+        i = start_idx
+        while i < n and used[i]:
+            i += 1
+        if i >= n:
+            return True
+        used[i] = True
+
+        # partner preference: closest first (i+1, i+2, ...)
+        for j in range(i + 1, n):
+            if used[j]:
+                continue
+            a, b = order[i], order[j]
+            key = (a, b) if a < b else (b, a)
+            if key in prior_lookup:
+                continue
+            used[j] = True
+            pairs.append((a, b))
+            if bt(i + 1):
+                return True
+            pairs.pop()
+            used[j] = False
+        used[i] = False
+        return False
+
+    ok = bt(0)
+    return pairs if ok else None
+
+
+
+# --- Added override: _pair_brackets (improved bracket solver) ---
+
+def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]]) -> list[tuple[str, str]]:
+    """
+    Improved bracket pairing:
+      - Start top→bottom as before.
+      - If a bracket fails, try multiple reorders (swap ends, middle-out, small shuffles)
+        and cross-bracket floats before allowing any rematch.
+      - Only if all strategies fail do we permit exactly the MINIMAL number of rematches.
+    """
+    import random
+
+    def try_orderings(base: list[str]) -> list[list[str]]:
+        # generate a handful of near-adjacent orderings to break deadlocks
+        variants = [base[:]]
+        if len(base) >= 4:
+            v = base[:]; v[-1], v[-2] = v[-2], v[-1]; variants.append(v)         # swap last two
+            v = base[:]; v[1], v[2] = v[2], v[1]; variants.append(v)             # swap 2 & 3
+            v = base[:]; v = v[::2] + v[1::2]; variants.append(v)                # interleave odds/evens
+        if len(base) >= 6:
+            v = base[:]; v[2], v[5] = v[5], v[2]; variants.append(v)             # cross-swap
+        # light shuffle with fixed seed for determinism across runs (but new per size)
+        rnd = random.Random(len(base) * 911)  # deterministic per bracket size
+        v = base[:]; rnd.shuffle(v); variants.append(v)
+        # de-dupe while preserving order
+        out, seen = [], set()
+        for arr in variants:
+            tup = tuple(arr)
+            if tup not in seen:
+                seen.add(tup); out.append(arr)
+        return out
+
+    pairs: list[tuple[str, str]] = []
+    carry_down: list[str] = []
+
+    def pair_bucket(work: list[str]) -> None | list[tuple[str, str]]:
+        # try multiple orderings of 'work' until one pairs with no rematches
+        for cand in try_orderings(work):
+            res = _pair_within_bracket(cand, prior_pairs)
+            if res is not None:
+                return res
+        return None  # signal to caller to try cross-bracket tricks
+
+    for idx, bucket in enumerate(brackets):
+        work = (carry_down + bucket) if carry_down else list(bucket)
+        carry_down = []
+
+        if not work:
+            continue
+
+        # Ensure even count; float lowest if needed
+        if len(work) % 2 == 1:
+            carry_down = [work.pop()]
+
+        # 1) try pairing this bracket as-is (with reorders)
+        res = pair_bucket(work)
+
+        # 2) if still impossible (due to prior_pairs constraints), try borrowing ONE from next bracket
+        if res is None and idx + 1 < len(brackets):
+            next_bucket = list(brackets[idx + 1])
+            if next_bucket:
+                # bring up the best candidate from next bracket and try again
+                candidate = next_bucket.pop(0)
+                work2 = work + [candidate]
+                if len(work2) % 2 == 1:
+                    carry_down = [work2.pop()] + carry_down
+                res = pair_bucket(work2)
+                if res is not None:
+                    pairs.extend(res)
+                    # put the remaining of next_bucket back (we only pulled one up)
+                    brackets[idx + 1] = next_bucket
+                    continue  # go next bracket
+
+        if res is not None:
+            pairs.extend(res)
+            continue
+
+        # 3) LAST resort: allow minimal rematches inside this bucket
+        #    We’ll greedily pick partners minimizing clashes count.
+        used = [False] * len(work)
+        chosen: list[tuple[str, str]] = []
+        prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
+
+        def greedy_pair():
+            # simple greedy: pair i with first j that isn’t used; prefer non-rematch else accept
+            for i in range(len(work)):
+                if used[i]: continue
+                used[i] = True
+                best_j = None
+                for j in range(i + 1, len(work)):
+                    if used[j]: continue
+                    a, b = work[i], work[j]
+                    key = (a, b) if a < b else (b, a)
+                    # pick non-rematch immediately
+                    if key not in prior_lookup:
+                        used[j] = True
+                        chosen.append((a, b))
+                        break
+                    if best_j is None:
+                        best_j = j
+                else:
+                    # no non-rematch found; use the first possible rematch
+                    if best_j is not None:
+                        j = best_j
+                        used[j] = True
+                        chosen.append((work[i], work[j]))
+                    else:
+                        return False
+            return True
+
+        ok = greedy_pair()
+        if not ok:
+            # shouldn't happen; but if it does, push all down to next bracket
+            carry_down = work + carry_down
+        else:
+            pairs.extend(chosen)
+
+    return pairs
+
