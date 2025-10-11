@@ -250,43 +250,37 @@ def _build_brackets(ids: list[str], pts_by_id: dict, kts_by_id: dict, id2name: d
         brackets.append(bucket)
     return brackets
 
-def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) -> Optional[list[tuple[str, str]]]:
+def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) -> None | list[tuple[str, str]]:
     """
-    Backtracking: preserve adjacency bias (1v2,3v4,...) while avoiding rematches.
+    Backtracking with adjacency bias (1v2,3v4,...) while avoiding rematches.
+    NO rematch fallback here — caller (_pair_brackets) will try alternative
+    reorders/carry strategies before allowing any rematch.
     """
     n = len(order)
+    if n == 0:
+        return []
     used = [False] * n
     pairs: list[tuple[str, str]] = []
-
     prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
 
     def bt(start_idx: int) -> bool:
-        # find next free i
         i = start_idx
         while i < n and used[i]:
             i += 1
         if i >= n:
             return True
         used[i] = True
-        # Prefer partners close to i to approximate 1v2,3v4
+
+        # partner preference: closest first (i+1, i+2, ...)
         for j in range(i + 1, n):
             if used[j]:
                 continue
             a, b = order[i], order[j]
+            if a == b:
+                continue  # hard guard against self-pair
             key = (a, b) if a < b else (b, a)
             if key in prior_lookup:
-                continue  # avoid rematch if possible
-            used[j] = True
-            pairs.append((a, b))
-            if bt(i + 1):
-                return True
-            pairs.pop()
-            used[j] = False
-        # If no non-rematch partner works, allow rematch as last resort
-        for j in range(i + 1, n):
-            if used[j]:
                 continue
-            a, b = order[i], order[j]
             used[j] = True
             pairs.append((a, b))
             if bt(i + 1):
@@ -301,41 +295,140 @@ def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) ->
 
 def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]]) -> list[tuple[str, str]]:
     """
-    Pair each bracket top-down. If a bracket is odd, float the lowest to the next bracket.
-    If pairing fails due to rematches, float the lowest and retry.
+    Improved bracket pairing with deterministic reorders, cross-bracket float, and
+    a guaranteed BYE to the last-place tail (lowest bracket, end of list) if odd total.
+    Also hard-blocks any self-pairing and de-duplicates final pairs.
     """
+    import random
+
+    # --- Preselect BYE from the global last-place if total is odd ---
+    total_players = sum(len(b) for b in brackets)
+    bye_player: str | None = None
+    if total_players % 2 == 1:
+        # pick the very last element of the last non-empty bracket
+        for k in range(len(brackets) - 1, -1, -1):
+            if brackets[k]:
+                bye_player = brackets[k].pop()
+                break
+
+    def try_orderings(base: list[str]) -> list[list[str]]:
+        variants = [base[:]]
+        n = len(base)
+        if n >= 4:
+            v = base[:]; v[-1], v[-2] = v[-2], v[-1]; variants.append(v)   # swap last two
+            v = base[:]; v[1], v[2] = v[2], v[1]; variants.append(v)       # swap 2 & 3
+            v = base[:]; v = v[::2] + v[1::2]; variants.append(v)          # interleave odds/evens
+        if n >= 6:
+            v = base[:]; v[2], v[5] = v[5], v[2]; variants.append(v)       # cross-swap
+        rnd = random.Random(n * 911)                                       # deterministic per size
+        v = base[:]; rnd.shuffle(v); variants.append(v)
+        out, seen = [], set()
+        for arr in variants:
+            tup = tuple(arr)
+            if tup not in seen:
+                seen.add(tup); out.append(arr)
+        return out
+
     pairs: list[tuple[str, str]] = []
     carry_down: list[str] = []
 
-    for bucket in brackets:
-        work = (carry_down + bucket) if carry_down else list(bucket)
+    def pair_bucket(work: list[str]) -> None | list[tuple[str, str]]:
+        for cand in try_orderings(work):
+            res = _pair_within_bracket(cand, prior_pairs)
+            if res is not None:
+                return res
+        return None
 
-        if len(work) == 0:
-            carry_down = []
+    for idx, bucket in enumerate(brackets):
+        work = (carry_down + bucket) if carry_down else list(bucket)
+        carry_down = []
+
+        if not work:
             continue
 
-        # If odd, float the lowest (last) down
+        # keep even; float lowest to next bracket if needed
         if len(work) % 2 == 1:
             carry_down = [work.pop()]
+
+        # 1) attempt no-repeat pairing with local reorders
+        res = pair_bucket(work)
+
+        # 2) if impossible, borrow ONE from next bracket and try again
+        if res is None and idx + 1 < len(brackets):
+            next_bucket = list(brackets[idx + 1])
+            if next_bucket:
+                candidate = next_bucket.pop(0)
+                work2 = work + [candidate] if candidate not in work else work[:]  # safety
+                if len(work2) % 2 == 1:
+                    carry_down = [work2.pop()] + carry_down
+                res = pair_bucket(work2)
+                if res is not None:
+                    pairs.extend(res)
+                    brackets[idx + 1] = next_bucket
+                    continue
+
+        if res is not None:
+            # sanitize any accidental self-pairs
+            res = [(a, b) for (a, b) in res if a != b]
+            pairs.extend(res)
+            continue
+
+        # 3) LAST resort: minimal repeats greedy (still no self-pair)
+        used = [False] * len(work)
+        chosen: list[tuple[str, str]] = []
+        prior_lookup = {(a, b) if a < b else (b, a) for (a, b) in prior_pairs}
+
+        def greedy_pair():
+            for i in range(len(work)):
+                if used[i]: continue
+                used[i] = True
+                best_j = None
+                for j in range(i + 1, len(work)):
+                    if used[j]: continue
+                    a, b = work[i], work[j]
+                    if a == b:  # hard guard
+                        continue
+                    key = (a, b) if a < b else (b, a)
+                    if key not in prior_lookup:
+                        used[j] = True
+                        chosen.append((a, b))
+                        break
+                    if best_j is None:
+                        best_j = j
+                else:
+                    if best_j is not None:
+                        j = best_j
+                        used[j] = True
+                        a, b = work[i], work[j]
+                        if a != b:
+                            chosen.append((a, b))
+                    else:
+                        return False
+            return True
+
+        ok = greedy_pair()
+        if not ok:
+            carry_down = work + carry_down
         else:
-            carry_down = []
+            pairs.extend(chosen)
 
-        # Try to pair; if impossible, float one more and retry
-        while True:
-            res = _pair_within_bracket(work, prior_pairs)
-            if res is not None:
-                pairs.extend(res)
-                break
-            if not work:
-                break
-            # float one more lowest to keep feasibility
-            carry_down = [work.pop()] + carry_down
-            if len(work) % 2 == 1:
-                if work:
-                    carry_down = [work.pop()] + carry_down
+    # Append BYE for the true last-place player, if selected
+    if bye_player is not None:
+        pairs.append((bye_player, "BYE"))
 
-    # If overall players were odd, carry_down may hold one player, but BYE is handled separately.
-    return pairs
+    # Final sanity: remove any self-pairs and duplicate edges
+    clean = []
+    seen = set()
+    for a, b in pairs:
+        if a == b:
+            continue
+        key = (a, b) if a < b else (b, a)
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.append((a, b))
+
+    return clean
 
 def pair_next(t: dict) -> tuple[int, list[dict]]:
     """
@@ -702,4 +795,6 @@ def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]])
             pairs.extend(chosen)
 
     return pairs
+
+#push down bracket
 
