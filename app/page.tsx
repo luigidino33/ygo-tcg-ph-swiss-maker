@@ -40,13 +40,7 @@ export default function Page() {
   const [info, setInfo] = useState<TournamentInfo|null>(null);
   const [standings, setStandings] = useState<StandRow[]>([]);
   const [creating, setCreating] = useState(false);
-  
-// Manual override UI state
-const [showOverride, setShowOverride] = useState(false);
-const [selA, setSelA] = useState<string>("");
-const [selB, setSelB] = useState<string>("");
-
-const [pairing, setPairing] = useState(false);
+  const [pairing, setPairing] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [playersText, setPlayersText] = useState("");
   const [name, setName] = useState("BDC Weekly");
@@ -209,39 +203,6 @@ if (pairs.length > 0) {
     }
   };
 
-
-const overridePair = async () => {
-  if (!tid) return;
-  if (!selA || !selB) {
-    alert("Pick two different players.");
-    return;
-  }
-  if (selA === selB) {
-    alert("Players must be different.");
-    return;
-  }
-  try {
-    const res = await fetchJSON(`/api/tournaments/${tid}/override-pair`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ a: selA, b: selB }),
-    });
-    if (!res.ok && !res.pairs) throw new Error(res.message || "Override failed");
-    setPairs(res.pairs || []);
-    setResults({});
-    const i = await fetchJSON(`/api/tournaments/${tid}`);
-    setInfo(i);
-    const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
-    setStandings(s.standings);
-    setShowOverride(false);
-    setSelA(""); setSelB("");
-    alert("✅ Locked table created and remaining pairings refreshed.");
-  } catch (e) {
-    console.error(e);
-    alert(`Override failed: ${errMsg(e)}`);
-  }
-};
-
   return (
     <main>
       <h1>🃏 YGO TCG PH - KTS Swiss</h1>
@@ -283,37 +244,6 @@ const overridePair = async () => {
                 </button>
               </div>
             </div>
-
-{showOverride && (
-  <div style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 12 }}>
-    <div style={{ fontWeight: 600, marginBottom: 8 }}>Lock a Table</div>
-    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-      <div>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>Player A</div>
-        <select value={selA} onChange={(e) => setSelA(e.target.value)}>
-          <option value="">— select —</option>
-          {(standings?.map?.((s:any) => ({ id: s.id, name: s.name })) ?? info?.players ?? []).map((p:any) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>Player B</div>
-        <select value={selB} onChange={(e) => setSelB(e.target.value)}>
-          <option value="">— select —</option>
-          {(standings?.map?.((s:any) => ({ id: s.id, name: s.name })) ?? info?.players ?? []).map((p:any) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={overridePair} disabled={!selA || !selB || selA === selB}>Apply Lock & Re-Pair</button>
-        <button onClick={() => { setShowOverride(false); setSelA(''); setSelB(''); }}>Cancel</button>
-      </div>
-    </div>
-  </div>
-)}
-
           </section>
         </>
       ) : (
