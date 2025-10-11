@@ -259,14 +259,40 @@ if (pairs.length > 0) {
                 <b>{info.name}</b> — Round <b>{info.round}</b> / <b>{info.total_rounds}</b>
               </p>
             )}
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-		<button onClick={pairNext} disabled={!canPairMore || pairing}>
-  			{pairing ? "Pairing..." : "Pair Next Round"}
-		</button>
-              <button onClick={finalizeRound} disabled={!pairs.length || finalizing}>
-                {finalizing ? "Finalizing..." : "Finalize Round"}
-              </button>
-            </div>
+<div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+  <button onClick={pairNext} disabled={!canPairMore || pairing}>
+    {pairing ? "Pairing..." : "Pair Next Round"}
+  </button>
+  <button onClick={finalizeRound} disabled={!pairs.length || finalizing}>
+    {finalizing ? "Finalizing..." : "Finalize Round"}
+  </button>
+  <button
+    onClick={async () => {
+      if (!tid) return;
+      if (!confirm("⚠️ Restart current round pairings? This will erase existing tables.")) return;
+      try {
+        const res = await fetchJSON(`/api/tournaments/${tid}/restart-round`, { method: "POST" });
+        if (!res.ok && !res.pairs) throw new Error(res.message || "Restart failed");
+        setPairs(res.pairs || []);
+        setResults({});
+        const i = await fetchJSON(`/api/tournaments/${tid}`);
+        setInfo(i);
+        const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
+        setStandings(s.standings);
+        alert("✅ Round pairings have been restarted.");
+      } catch (e) {
+        console.error(e);
+        alert(`Restart failed: ${errMsg(e)}`);
+      }
+    }}
+    style={{ background: "#fef6e4", border: "1px solid #f2b705", color: "#000" }}
+    disabled={!pairs.length}
+  >
+    🔁 Restart Pairings
+  </button>
+</div>
+
+
           </section>
 
           <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
