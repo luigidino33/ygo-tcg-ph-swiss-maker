@@ -1,4 +1,4 @@
 # ygo-tcg-ph-swiss-maker
-swiss pairings
+swiss pairings minor update
 
 # This is for personal use only. 
