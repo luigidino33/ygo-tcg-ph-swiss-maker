@@ -301,17 +301,56 @@ def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]])
   return pairs
 
 def pair_next(t: dict) -> tuple[int, list[dict]]:
+  """
+  Compute pairings for the next round.
+
+  - Round 1: fully random pairings (including random BYE if odd number of players).
+  - Later rounds: Swiss pairings based on standings and KTS, avoiding repeat matchups.
+  """
   nodes, pts_by_id, kts_by_id, id2name = _standings_maps(t)
   prior = prior_pairs_set(t)
+  curr_round = current_round_number(t)
 
-  # Build list of all player IDs
+  # List of all player IDs
   all_ids = [p["id"] for p in t["players"]]
 
-  # First round: randomize initial seating instead of alphabetical
-  curr_round = current_round_number(t)
+  # ── ROUND 1: PURE RANDOM PAIRINGS ────────────────────────────────────────
   if curr_round == 0:
     random.shuffle(all_ids)
 
+    bye_id: Optional[str] = None
+    if len(all_ids) % 2 == 1:
+      # Random bye among players (no standings yet)
+      bye_id = random.choice(all_ids)
+      all_ids = [pid for pid in all_ids if pid != bye_id]
+
+    matches: list[dict] = []
+    table = 1
+    for i in range(0, len(all_ids), 2):
+      a = all_ids[i]
+      b = all_ids[i + 1]
+      matches.append({
+        "id": new_id("m"),
+        "t": table,
+        "a": a,
+        "b": b,
+        "r": "PENDING",
+      })
+      table += 1
+
+    if bye_id:
+      matches.append({
+        "id": new_id("m"),
+        "t": table,
+        "a": bye_id,
+        "b": None,
+        "r": "BYE",
+      })
+
+    # First round number is 1
+    return 1, matches
+
+  # ── LATER ROUNDS: NORMAL SWISS LOGIC ─────────────────────────────────────
   bye_id: Optional[str] = None
   if len(all_ids) % 2 == 1:
     bye_id = _choose_bye_id(t, pts_by_id, kts_by_id, nodes)
@@ -321,7 +360,8 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
   id_pairs = _pair_brackets(brackets, prior)
 
   rnd_no = curr_round + 1
-  matches, table = [], 1
+  matches: list[dict] = []
+  table = 1
   for a, b in id_pairs:
     matches.append({"id": new_id("m"), "t": table, "a": a, "b": b, "r": "PENDING"})
     table += 1
@@ -628,7 +668,7 @@ def api_edit_pairings(tid):
 def api_restart_round(tid):
   """
   Recompute pairings for the current round (same round number), before results.
-  Uses Swiss algorithm based on standings PRIOR to this round.
+  Uses Swiss algorithm (or random for Round 1) based on standings PRIOR to this round.
   """
   try:
     t = read_tdoc_or_retry(tid)
