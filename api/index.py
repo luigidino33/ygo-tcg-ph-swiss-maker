@@ -303,7 +303,14 @@ def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]])
 def pair_next(t: dict) -> tuple[int, list[dict]]:
   nodes, pts_by_id, kts_by_id, id2name = _standings_maps(t)
   prior = prior_pairs_set(t)
+
+  # Build list of all player IDs
   all_ids = [p["id"] for p in t["players"]]
+
+  # First round: randomize initial seating instead of alphabetical
+  curr_round = current_round_number(t)
+  if curr_round == 0:
+    random.shuffle(all_ids)
 
   bye_id: Optional[str] = None
   if len(all_ids) % 2 == 1:
@@ -313,7 +320,7 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
   brackets = _build_brackets(all_ids, pts_by_id, kts_by_id, id2name)
   id_pairs = _pair_brackets(brackets, prior)
 
-  rnd_no = current_round_number(t) + 1
+  rnd_no = curr_round + 1
   matches, table = [], 1
   for a, b in id_pairs:
     matches.append({"id": new_id("m"), "t": table, "a": a, "b": b, "r": "PENDING"})
