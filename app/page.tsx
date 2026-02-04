@@ -273,362 +273,283 @@ export default function Page() {
     }
   }, [pairs]);
 
-  const nameToId = useMemo(() => {
-    const map = new Map<string, string>();
-    (players || []).forEach((p) => map.set(p.name, p.id));
-    return map;
-  }, [players]);
-
-  const initialManualPairs: LocalPair[] = useMemo(() => {
-    if (!pairs.length) return [];
+  const initialManualPairs = useMemo<LocalPair[]>(() => {
+    if (!players || !pairs) return [];
     return pairs.map((p) => ({
       table: p.table,
-      a_id: nameToId.get(p.a) || "",
-      b_id: p.b === "BYE" ? null : nameToId.get(p.b) || "",
+      a_id: players.find((pl) => pl.name === p.a)?.id || "",
+      b_id: p.b === "BYE" ? null : (players.find((pl) => pl.name === p.b)?.id || null),
     }));
-  }, [pairs, nameToId]);
+  }, [pairs, players]);
 
-  const handleSavePairings = async (newPairs: LocalPair[]) => {
+  const handleSavePairings = async (pairsToSave: LocalPair[]) => {
     if (!tid) return;
     try {
-      const res = await fetchJSON(`/api/tournaments/${tid}/edit-pairings`, {
+      await fetchJSON(`/api/tournaments/${tid}/manual-pair`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairs: newPairs }),
+        body: JSON.stringify({ pairs: pairsToSave }),
       });
-      setPairs(res.pairs || []);
-      setResults({});
-      alert("✅ Pairings updated.");
+      alert("✅ Pairings updated successfully!");
+      setShowPairEditor(false);
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+      const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
+      setStandings(s.standings);
+      const a = await fetchJSON(`/api/tournaments/${tid}/active`);
+      setPairs(a.pairs || []);
     } catch (e) {
       console.error(e);
-      alert(`Edit pairings failed: ${errMsg(e)}`);
-    } finally {
-      setShowPairEditor(false);
+      alert(`Failed to save pairings: ${errMsg(e)}`);
     }
   };
 
-  return (
-    <main>
-      <h1>🃏 YGO TCG PH - KTS Swiss</h1>
+  if (!tid) {
+    return (
+      <div style={{ maxWidth: 600, margin: "0 auto", paddingTop: 48 }}>
+        <div className="card">
+          <h1>⚔️ YGO Swiss Tournament</h1>
+          <div>
+            <label>Tournament Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g., BDC Weekly"
+            />
+          </div>
+          <div>
+            <label>Number of Rounds</label>
+            <input
+              type="number"
+              value={rounds}
+              onChange={(e) => setRounds(Number(e.target.value))}
+              min={1}
+              max={20}
+            />
+          </div>
+          <div>
+            <label>Players (one per line)</label>
+            <textarea
+              value={playersText}
+              onChange={(e) => setPlayersText(e.target.value)}
+              rows={10}
+              placeholder="John Doe&#10;Jane Smith&#10;Alex Johnson"
+              style={{ fontFamily: 'monospace' }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+            <button onClick={createTournament} disabled={creating} style={{ flex: 1 }}>
+              {creating ? "Creating..." : "⚔️ Create Tournament"}
+            </button>
+            <button onClick={loadExisting} className="secondary" style={{ flex: 1 }}>
+              📂 Load Existing
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-      {!tid ? (
-        <>
-          <section
-            style={{ marginTop: 16, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}
-          >
-            <h3>Create Tournament</h3>
-            <div style={{ display: "grid", gap: 8, maxWidth: 560 }}>
-              <label>
-                Name:
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  style={{ width: "100%" }}
-                />
-              </label>
-              <label>
-                Rounds:
-                <input
-                  type="number"
-                  min={1}
-                  max={12}
-                  value={rounds}
-                  onChange={(e) => setRounds(parseInt(e.target.value || "1"))}
-                />
-              </label>
-              <label>
-                Players (one per line):
-                <textarea
-                  value={playersText}
-                  onChange={(e) => setPlayersText(e.target.value)}
-                  placeholder={"Mario\nLuigi\nYoshi"}
-                  style={{ width: "100%", height: 160 }}
-                />
-              </label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={createTournament} disabled={creating}>
-                  {creating ? "Creating..." : "Create"}
-                </button>
-                <button onClick={loadExisting} style={{ opacity: 0.7 }}>
-                  Load existing by ID
-                </button>
-              </div>
-            </div>
-          </section>
-        </>
-      ) : (
-        <>
-          <section style={{ marginTop: 12, marginBottom: 8 }}>
-            <div
-              style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}
-            >
-              <strong>Tournament ID:</strong>
-              <code>{tid}</code>
-              <button onClick={forgetTournament} style={{ marginLeft: 8 }}>
-                Forget
-              </button>
-            </div>
+  return (
+    <main style={{ maxWidth: 1400, margin: '0 auto' }}>
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <h1>⚔️ {info?.name || "Tournament"}</h1>
             {info && (
-              <p style={{ marginTop: 8 }}>
-                <b>{info.name}</b> — Round <b>{info.round}</b> /{" "}
-                <b>{info.total_rounds}</b>
+              <p style={{ color: '#d4af37', fontSize: 14 }}>
+                Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists
               </p>
             )}
-            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <button onClick={pairNext} disabled={!canPairMore || pairing}>
-                {pairing ? "Pairing..." : "Pair Next Round"}
-              </button>
-              <button onClick={finalizeRound} disabled={!pairs.length || finalizing}>
-                {finalizing ? "Finalizing..." : "Finalize Round"}
-              </button>
-              <button
-                onClick={async () => {
-                  if (!tid) return;
-                  if (
-                    !confirm(
-                      "⚠️ Restart current round pairings? This will erase existing tables.",
-                    )
-                  )
-                    return;
-                  try {
-                    const res = await fetchJSON(
-                      `/api/tournaments/${tid}/restart-round`,
-                      { method: "POST" },
-                    );
-                    if (!res.pairs) throw new Error(res.message || "Restart failed");
-                    setPairs(res.pairs || []);
-                    setResults({});
-                    const i = await fetchJSON(`/api/tournaments/${tid}`);
-                    setInfo(i);
-                    setPlayers(i.players || []);
-                    const s = await fetchJSON(`/api/tournaments/${tid}/standings`);
-                    setStandings(s.standings);
-                    alert("✅ Round pairings have been restarted.");
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Restart failed: ${errMsg(e)}`);
-                  }
-                }}
-                style={{ background: "#fef6e4", border: "1px solid #f2b705", color: "#000" }}
-                disabled={!pairs.length}
-              >
-                🔁 Restart Pairings
-              </button>
-              <button onClick={() => setShowPairEditor(true)} disabled={!players.length}>
-                ✏️ Edit Pairings
-              </button>
-              <button onClick={() => setShowEdit((v) => !v)} disabled={!pairs.length}>
-                📝 Edit Result
-              </button>
-            </div>
+          </div>
+          <button onClick={forgetTournament} className="secondary">
+            ⚙️ Close Tournament
+          </button>
+        </div>
+      </div>
 
-            {showEdit && (
-              <div
-                style={{
-                  marginTop: 12,
-                  padding: 12,
-                  border: "1px solid #ddd",
-                  borderRadius: 12,
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Edit a Result</div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 12,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                  }}
+      <div className="card">
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={pairNext} disabled={!canPairMore || pairing}>
+            {pairing ? "⏳ Pairing..." : "⚔️ Pair Next Round"}
+          </button>
+          <button onClick={finalizeRound} disabled={!pairs.length || finalizing} className="success">
+            {finalizing ? "⏳ Finalizing..." : "✅ Finalize Round"}
+          </button>
+          <button onClick={() => setShowPairEditor(true)} disabled={!players.length} className="secondary">
+            ✏️ Edit Pairings
+          </button>
+          <button onClick={() => setShowEdit((v) => !v)} disabled={!pairs.length} className="secondary">
+            📝 Edit Result
+          </button>
+        </div>
+
+        {showEdit && (
+          <div className="card" style={{ marginTop: 16 }}>
+            <h3>Edit a Result</h3>
+            <div style={{ display: "flex", gap: 12, alignItems: 'flex-end', flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label>Select Match</label>
+                <select
+                  value={editMatchId}
+                  onChange={(e) => setEditMatchId(e.target.value)}
                 >
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>Table</div>
-                    <select
-                      value={editMatchId}
-                      onChange={(e) => setEditMatchId(e.target.value)}
-                    >
-                      <option value="">— select —</option>
-                      {matchOptions.map((m: any) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>Result</div>
-                    <select
-                      value={editResult}
-                      onChange={(e) => setEditResult(e.target.value)}
-                    >
-                      <option value="PENDING">PENDING</option>
-                      <option value="A">A wins</option>
-                      <option value="B">B wins</option>
-                      <option value="DRAW">DRAW</option>
-                      <option value="BYE">BYE</option>
-                    </select>
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={editResultSave} disabled={!editMatchId}>
-                      Save
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowEdit(false);
-                        setEditMatchId("");
-                        setEditResult("PENDING");
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section
-            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}
-          >
-            <div>
-              <h3>Current Pairings</h3>
-              {!pairs.length ? (
-                <p style={{ color: "#777" }}>
-                  No active pairings. Click <b>Pair Next Round</b>.
-                </p>
-              ) : (
-                <div>
-                  {pairs.map((p) => (
-                    <div
-                      key={p.match_id}
-                      style={{
-                        border: "1px solid #ddd",
-                        padding: 12,
-                        borderRadius: 12,
-                        margin: "8px 0",
-                      }}
-                    >
-                      <b>Table {p.table}</b>
-                      <div>
-                        {p.a} vs {p.b}
-                      </div>
-                      {p.b === "BYE" ? (
-                        <div style={{ color: "#555", fontStyle: "italic" }}>
-                          BYE is auto-recorded.
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-                          <label>
-                            <input
-                              type="radio"
-                              name={p.match_id}
-                              onChange={() =>
-                                setResults((r) => ({ ...r, [p.match_id]: "A" }))
-                              }
-                              checked={results[p.match_id] === "A"}
-                            />{" "}
-                            {p.a} wins
-                          </label>
-                          <label>
-                            <input
-                              type="radio"
-                              name={p.match_id}
-                              onChange={() =>
-                                setResults((r) => ({ ...r, [p.match_id]: "B" }))
-                              }
-                              checked={results[p.match_id] === "B"}
-                            />{" "}
-                            {p.b} wins
-                          </label>
-                          <label>
-                            <input
-                              type="radio"
-                              name={p.match_id}
-                              onChange={() =>
-                                setResults((r) => ({ ...r, [p.match_id]: "TIE" }))
-                              }
-                              checked={results[p.match_id] === "TIE"}
-                            />{" "}
-                            Tie
-                          </label>
-                        </div>
-                      )}
-                    </div>
+                  <option value="">— select —</option>
+                  {matchOptions.map((m: any) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
                   ))}
-                </div>
-              )}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <label>New Result</label>
+                <select
+                  value={editResult}
+                  onChange={(e) => setEditResult(e.target.value)}
+                >
+                  <option value="PENDING">Pending</option>
+                  <option value="A">Player A Won</option>
+                  <option value="B">Player B Won</option>
+                  <option value="TIE">Tie</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={editResultSave} disabled={!editMatchId}>
+                  💾 Save
+                </button>
+                <button onClick={() => setShowEdit(false)} className="secondary">
+                  Cancel
+                </button>
+              </div>
             </div>
+          </div>
+        )}
+      </div>
 
-            <div>
-              <h3>Standings</h3>
-              {!standings.length ? (
-                <p style={{ color: "#777" }}>No standings yet.</p>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>
-                        {["Rank", "Player", "Pts", "MW%", "OMW%", "OOMW%", "DDD", "KTS"].map(
-                          (h) => (
-                            <th
-                              key={h}
-                              style={{
-                                border: "1px solid #ddd",
-                                padding: 8,
-                                background: "#f7f7f7",
-                                textAlign: "left",
-                              }}
+      {pairs.length > 0 && (
+        <div className="card">
+          <h2>🎴 Active Pairings</h2>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 80 }}>Table</th>
+                  <th>Player A</th>
+                  <th>Player B</th>
+                  <th style={{ width: 300 }}>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pairs.map((p) => {
+                  const isBye = p.b === "BYE";
+                  const currentResult = results[p.match_id];
+                  return (
+                    <tr key={p.match_id}>
+                      <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 18 }}>
+                        {p.table}
+                      </td>
+                      <td style={{ 
+                        fontWeight: 'bold',
+                        background: currentResult === "A" ? 'rgba(44, 143, 95, 0.3)' : undefined 
+                      }}>
+                        {p.a}
+                      </td>
+                      <td style={{ 
+                        fontWeight: 'bold',
+                        background: currentResult === "B" ? 'rgba(44, 143, 95, 0.3)' : undefined,
+                        fontStyle: isBye ? 'italic' : undefined,
+                        opacity: isBye ? 0.6 : 1
+                      }}>
+                        {p.b}
+                      </td>
+                      <td>
+                        {isBye ? (
+                          <span style={{ fontSize: 14, opacity: 0.7 }}>Auto Win</span>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                            <button
+                              className={`result-btn ${currentResult === "A" ? "selected" : ""}`}
+                              onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "A" }))}
                             >
-                              {h}
-                            </th>
-                          ),
+                              A Wins
+                            </button>
+                            <button
+                              className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
+                              onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
+                            >
+                              Tie
+                            </button>
+                            <button
+                              className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
+                              onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "B" }))}
+                            >
+                              B Wins
+                            </button>
+                          </div>
                         )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {standings.map((r) => (
-                        <tr key={`${r.rank}-${r.player}`}>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.rank}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.player}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.pts}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.mw.toFixed(1)}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.omw.toFixed(1)}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.oomw.toFixed(1)}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.ddd}
-                          </td>
-                          <td style={{ border: "1px solid #ddd", padding: 8 }}>
-                            {r.kts}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </section>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
-          {showPairEditor && (
-            <ManualPairingEditor
-              players={players}
-              initial={initialManualPairs}
-              onCancel={() => setShowPairEditor(false)}
-              onSave={handleSavePairings}
-            />
-          )}
-        </>
+      {standings.length > 0 && (
+        <div className="card">
+          <h2>🏆 Current Standings</h2>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 60 }}>Rank</th>
+                  <th>Duelist</th>
+                  <th style={{ width: 80 }}>Points</th>
+                  <th style={{ width: 80 }}>MW%</th>
+                  <th style={{ width: 80 }}>OMW%</th>
+                  <th style={{ width: 80 }}>OOMW%</th>
+                  <th style={{ width: 120 }}>DDD</th>
+                  <th style={{ width: 120 }}>KTS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {standings.map((r) => (
+                  <tr key={r.rank} className={`rank-${r.rank}`}>
+                    <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 18 }}>
+                      {r.rank === 1 && '🥇 '}
+                      {r.rank === 2 && '🥈 '}
+                      {r.rank === 3 && '🥉 '}
+                      {r.rank}
+                    </td>
+                    <td style={{ fontWeight: 'bold' }}>{r.player}</td>
+                    <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 16 }}>
+                      {r.pts}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>{r.mw.toFixed(1)}</td>
+                    <td style={{ textAlign: 'center' }}>{r.omw.toFixed(1)}</td>
+                    <td style={{ textAlign: 'center' }}>{r.oomw.toFixed(1)}</td>
+                    <td style={{ textAlign: 'center', fontSize: 12 }}>{r.ddd}</td>
+                    <td style={{ textAlign: 'center', fontSize: 12 }}>{r.kts}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {showPairEditor && (
+        <ManualPairingEditor
+          players={players}
+          initial={initialManualPairs}
+          onCancel={() => setShowPairEditor(false)}
+          onSave={handleSavePairings}
+        />
       )}
     </main>
   );
@@ -645,19 +566,13 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
   const [rows, setRows] = useState<LocalPair[]>(
     initial.length
       ? initial
-      : [
-          {
-            table: 1,
-            a_id: "",
-            b_id: null,
-          },
-        ],
+      : [{ table: 1, a_id: "", b_id: null }]
   );
   const [error, setError] = useState<string | null>(null);
 
   const sortedPlayers = useMemo(
     () => [...players].sort((a, b) => a.name.localeCompare(b.name)),
-    [players],
+    [players]
   );
 
   const updateRow = (index: number, field: "a_id" | "b_id", value: string) => {
@@ -677,11 +592,7 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
   const addRow = () => {
     setRows((prev) => [
       ...prev,
-      {
-        table: prev.length + 1,
-        a_id: "",
-        b_id: null,
-      },
+      { table: prev.length + 1, a_id: "", b_id: null }
     ]);
   };
 
@@ -689,7 +600,7 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
     setRows((prev) =>
       prev
         .filter((_, i) => i !== index)
-        .map((p, idx) => ({ ...p, table: idx + 1 })),
+        .map((p, idx) => ({ ...p, table: idx + 1 }))
     );
   };
 
@@ -702,9 +613,7 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
       const a = row.a_id;
       const b = row.b_id;
 
-      if (!a && !b) {
-        continue; // completely blank row
-      }
+      if (!a && !b) continue;
       if (!a && b) {
         setError("Each non-empty table must have Player A.");
         return;
@@ -725,7 +634,6 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
 
       used.add(a);
       if (b) used.add(b);
-
       cleaned.push(row);
     }
 
@@ -734,7 +642,6 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
       return;
     }
 
-    // Normalize table numbers 1..N
     const normalized = cleaned.map((p, idx) => ({
       ...p,
       table: idx + 1,
@@ -744,77 +651,46 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-      }}
-    >
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: 12,
-          padding: 16,
-          maxWidth: 800,
-          width: "100%",
-          maxHeight: "90vh",
-          overflow: "auto",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <h2 style={{ fontSize: 18, fontWeight: 600 }}>Edit Pairings (current round)</h2>
-          <button onClick={onCancel}>✕ Close</button>
+    <div className="modal-overlay">
+      <div className="modal-content">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h2>✏️ Edit Pairings</h2>
+          <button onClick={onCancel} className="secondary">✕ Close</button>
         </div>
 
         {error && (
-          <div
-            style={{
-              marginBottom: 8,
-              padding: 8,
-              borderRadius: 8,
-              border: "1px solid #fca5a5",
-              background: "#fef2f2",
-              color: "#b91c1c",
-              fontSize: 13,
-            }}
-          >
+          <div style={{
+            padding: 12,
+            marginBottom: 16,
+            border: '2px solid #dc2626',
+            borderRadius: 8,
+            background: 'rgba(220, 38, 38, 0.1)',
+            color: '#fca5a5'
+          }}>
             {error}
           </div>
         )}
 
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead style={{ background: "#f7f7f7" }}>
+        <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+          <table>
+            <thead>
               <tr>
-                <th style={{ padding: 6, borderBottom: "1px solid #ddd", width: 60 }}>Table</th>
-                <th style={{ padding: 6, borderBottom: "1px solid #ddd" }}>Player A</th>
-                <th style={{ padding: 6, borderBottom: "1px solid #ddd" }}>Player B (optional / BYE)</th>
-                <th style={{ padding: 6, borderBottom: "1px solid #ddd", width: 80 }} />
+                <th style={{ width: 80 }}>Table</th>
+                <th>Player A</th>
+                <th>Player B (optional / BYE)</th>
+                <th style={{ width: 100 }}></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row, idx) => (
                 <tr key={idx}>
-                  <td style={{ padding: 6, borderTop: "1px solid #eee", textAlign: "center" }}>
+                  <td style={{ textAlign: 'center', fontWeight: 'bold' }}>
                     {row.table}
                   </td>
-                  <td style={{ padding: 6, borderTop: "1px solid #eee" }}>
+                  <td>
                     <select
                       value={row.a_id}
                       onChange={(e) => updateRow(idx, "a_id", e.target.value)}
-                      style={{ width: "100%" }}
                     >
                       <option value="">— empty —</option>
                       {sortedPlayers.map((p) => (
@@ -824,11 +700,10 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
                       ))}
                     </select>
                   </td>
-                  <td style={{ padding: 6, borderTop: "1px solid #eee" }}>
+                  <td>
                     <select
                       value={row.b_id ?? ""}
                       onChange={(e) => updateRow(idx, "b_id", e.target.value)}
-                      style={{ width: "100%" }}
                     >
                       <option value="">— BYE / empty —</option>
                       {sortedPlayers.map((p) => (
@@ -838,16 +713,11 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
                       ))}
                     </select>
                   </td>
-                  <td
-                    style={{
-                      padding: 6,
-                      borderTop: "1px solid #eee",
-                      textAlign: "center",
-                    }}
-                  >
+                  <td style={{ textAlign: 'center' }}>
                     <button
                       onClick={() => removeRow(idx)}
-                      style={{ fontSize: 12, color: "#b91c1c" }}
+                      className="secondary"
+                      style={{ fontSize: 12, padding: '6px 12px' }}
                     >
                       Remove
                     </button>
@@ -858,18 +728,11 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
           </table>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: 8,
-            alignItems: "center",
-          }}
-        >
-          <button onClick={addRow}>+ Add table</button>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={onCancel}>Cancel</button>
-            <button onClick={handleSave}>Save pairings</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={addRow} className="secondary">+ Add table</button>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button onClick={onCancel} className="secondary">Cancel</button>
+            <button onClick={handleSave} className="success">💾 Save pairings</button>
           </div>
         </div>
       </div>
