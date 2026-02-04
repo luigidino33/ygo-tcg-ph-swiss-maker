@@ -359,7 +359,7 @@ export default function Page() {
           <div>
             <h1>⚔️ {info?.name || "Tournament"}</h1>
             {info && (
-              <p style={{ color: '#d4af37', fontSize: 14 }}>
+              <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
                 Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists
               </p>
             )}
@@ -432,70 +432,61 @@ export default function Page() {
       {pairs.length > 0 && (
         <div className="card">
           <h2>🎴 Active Pairings</h2>
-          <div style={{ overflowX: 'auto' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 80 }}>Table</th>
-                  <th>Player A</th>
-                  <th>Player B</th>
-                  <th style={{ width: 300 }}>Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pairs.map((p) => {
-                  const isBye = p.b === "BYE";
-                  const currentResult = results[p.match_id];
-                  return (
-                    <tr key={p.match_id}>
-                      <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 18 }}>
-                        {p.table}
-                      </td>
-                      <td style={{ 
-                        fontWeight: 'bold',
-                        background: currentResult === "A" ? 'rgba(44, 143, 95, 0.3)' : undefined 
-                      }}>
-                        {p.a}
-                      </td>
-                      <td style={{ 
-                        fontWeight: 'bold',
-                        background: currentResult === "B" ? 'rgba(44, 143, 95, 0.3)' : undefined,
-                        fontStyle: isBye ? 'italic' : undefined,
-                        opacity: isBye ? 0.6 : 1
-                      }}>
-                        {p.b}
-                      </td>
-                      <td>
-                        {isBye ? (
-                          <span style={{ fontSize: 14, opacity: 0.7 }}>Auto Win</span>
-                        ) : (
-                          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                            <button
-                              className={`result-btn ${currentResult === "A" ? "selected" : ""}`}
-                              onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "A" }))}
-                            >
-                              A Wins
-                            </button>
-                            <button
-                              className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
-                              onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
-                            >
-                              Tie
-                            </button>
-                            <button
-                              className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
-                              onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "B" }))}
-                            >
-                              B Wins
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
+            {pairs.map((p) => {
+              const isBye = p.b === "BYE";
+              const currentResult = results[p.match_id];
+              const isCompleted = !!currentResult || isBye;
+              
+              return (
+                <div key={p.match_id} className={`pairing-card ${isCompleted ? 'completed' : ''}`}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <div className="table-number">#{p.table}</div>
+                    {isBye && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>Auto Win</span>}
+                  </div>
+                  
+                  <div style={{ margin: '16px 0' }}>
+                    <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
+                      {currentResult === "A" && "👑 "}
+                      {p.a}
+                    </div>
+                    <div style={{ textAlign: 'center', margin: '8px 0' }}>
+                      <span className="vs-badge">VS</span>
+                    </div>
+                    <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
+                      opacity: isBye ? 0.5 : 1,
+                      fontStyle: isBye ? 'italic' : 'normal'
+                    }}>
+                      {currentResult === "B" && "👑 "}
+                      {p.b}
+                    </div>
+                  </div>
+                  
+                  {!isBye && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+                      <button
+                        className={`result-btn ${currentResult === "A" ? "selected" : ""}`}
+                        onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "A" }))}
+                      >
+                        ⚔️ {p.a.split(' ')[0]} Wins
+                      </button>
+                      <button
+                        className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
+                        onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
+                      >
+                        🤝 Draw
+                      </button>
+                      <button
+                        className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
+                        onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "B" }))}
+                      >
+                        ⚔️ {p.b.split(' ')[0]} Wins
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
