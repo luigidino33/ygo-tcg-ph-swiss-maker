@@ -335,7 +335,7 @@ export default function Page() {
               value={playersText}
               onChange={(e) => setPlayersText(e.target.value)}
               rows={10}
-              placeholder="John Doe&#10;Jane Smith&#10;Alex Johnson"
+              placeholder={"Luigi \nMario \nYoshi \nToad "}
               style={{ fontFamily: 'monospace' }}
             />
           </div>
