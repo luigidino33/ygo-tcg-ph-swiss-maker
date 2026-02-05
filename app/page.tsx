@@ -446,19 +446,31 @@ export default function Page() {
                   </div>
                   
                   <div style={{ margin: '16px 0' }}>
-                    <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
-                      {currentResult === "A" && "👑 "}
-                      {p.a}
+                    <div>
+                      <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
+                        {currentResult === "A" && "👑 "}
+                        {p.a}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, fontFamily: 'monospace' }}>
+                        ID: {players.find((pl) => pl.name === p.a)?.id || 'N/A'}
+                      </div>
                     </div>
                     <div style={{ textAlign: 'center', margin: '8px 0' }}>
                       <span className="vs-badge">VS</span>
                     </div>
-                    <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
-                      opacity: isBye ? 0.5 : 1,
-                      fontStyle: isBye ? 'italic' : 'normal'
-                    }}>
-                      {currentResult === "B" && "👑 "}
-                      {p.b}
+                    <div>
+                      <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
+                        opacity: isBye ? 0.5 : 1,
+                        fontStyle: isBye ? 'italic' : 'normal'
+                      }}>
+                        {currentResult === "B" && "👑 "}
+                        {p.b}
+                      </div>
+                      {!isBye && (
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, fontFamily: 'monospace' }}>
+                          ID: {players.find((pl) => pl.name === p.b)?.id || 'N/A'}
+                        </div>
+                      )}
                     </div>
                   </div>
                   
@@ -500,6 +512,7 @@ export default function Page() {
                 <tr>
                   <th style={{ width: 60 }}>Rank</th>
                   <th>Duelist</th>
+                  <th style={{ width: 100 }}>Player ID</th>
                   <th style={{ width: 80 }}>Points</th>
                   <th style={{ width: 80 }}>MW%</th>
                   <th style={{ width: 80 }}>OMW%</th>
@@ -518,6 +531,9 @@ export default function Page() {
                       {r.rank}
                     </td>
                     <td style={{ fontWeight: 'bold' }}>{r.player}</td>
+                    <td style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#94a3b8' }}>
+                      {players.find((pl) => pl.name === r.player)?.id || 'N/A'}
+                    </td>
                     <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 16 }}>
                       {r.pts}
                     </td>
