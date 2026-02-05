@@ -435,65 +435,172 @@ export default function Page() {
       </div>
 
       {pairs.length > 0 && (
-        <div className="card">
-          <h2>🎴 Active Pairings</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
-            {pairs.map((p) => {
-              const isBye = p.b === "BYE";
-              const currentResult = results[p.match_id];
-              const isCompleted = !!currentResult || isBye;
-              
-              return (
-                <div key={p.match_id} className={`pairing-card ${isCompleted ? 'completed' : ''}`}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <div className="table-number">#{p.table}</div>
-                    {isBye && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>Auto Win</span>}
-                  </div>
-                  
-                  <div style={{ margin: '16px 0' }}>
-                    <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
-                      {currentResult === "A" && "👑 "}
-                      {p.a}
-                    </div>
-                    <div style={{ textAlign: 'center', margin: '8px 0' }}>
-                      <span className="vs-badge">VS</span>
-                    </div>
-                    <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
-                      opacity: isBye ? 0.5 : 1,
-                      fontStyle: isBye ? 'italic' : 'normal'
+        <>
+          {/* Compact Summary View - Mobile Optimized */}
+          <div className="card">
+            <h2>📋 Match Summary</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {pairs.map((p) => {
+                const isBye = p.b === "BYE";
+                const currentResult = results[p.match_id];
+                const isCompleted = !!currentResult || isBye;
+                
+                return (
+                  <div 
+                    key={`summary-${p.match_id}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '12px',
+                      background: isCompleted 
+                        ? 'linear-gradient(135deg, rgba(56, 142, 60, 0.15), rgba(76, 175, 80, 0.08))'
+                        : 'rgba(26, 35, 126, 0.4)',
+                      border: `2px solid ${isCompleted ? '#81c784' : '#5c6bc0'}`,
+                      borderRadius: 8,
+                      transition: 'all 0.3s ease'
+                    }}
+                  >
+                    {/* Table Number */}
+                    <div style={{
+                      background: 'linear-gradient(135deg, #64b5f6, #90caf9)',
+                      color: '#0c1445',
+                      fontWeight: 900,
+                      fontSize: 16,
+                      padding: '6px 12px',
+                      borderRadius: 6,
+                      minWidth: 45,
+                      textAlign: 'center',
+                      flexShrink: 0,
+                      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.3)'
                     }}>
-                      {currentResult === "B" && "👑 "}
-                      {p.b}
+                      #{p.table}
+                    </div>
+                    
+                    {/* Match Info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ 
+                        fontSize: 14, 
+                        fontWeight: 'bold',
+                        color: currentResult === "A" ? '#81c784' : '#e8eaf6',
+                        marginBottom: 2,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {currentResult === "A" && "👑 "}{p.a}
+                      </div>
+                      <div style={{ 
+                        fontSize: 14, 
+                        fontWeight: 'bold',
+                        color: currentResult === "B" ? '#81c784' : (isBye ? '#94a3b8' : '#e8eaf6'),
+                        opacity: isBye ? 0.6 : 1,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {currentResult === "B" && "👑 "}{p.b}
+                      </div>
+                    </div>
+                    
+                    {/* Status Indicator */}
+                    <div style={{ flexShrink: 0 }}>
+                      {isCompleted ? (
+                        <div style={{
+                          background: 'linear-gradient(135deg, #388e3c, #4caf50)',
+                          color: '#fff',
+                          padding: '4px 10px',
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 'bold',
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.5
+                        }}>
+                          {isBye ? "BYE" : currentResult === "TIE" ? "DRAW" : "DONE"}
+                        </div>
+                      ) : (
+                        <div style={{
+                          background: 'rgba(100, 181, 246, 0.2)',
+                          color: '#90caf9',
+                          padding: '4px 10px',
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 'bold',
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.5,
+                          border: '1px solid rgba(100, 181, 246, 0.3)'
+                        }}>
+                          LIVE
+                        </div>
+                      )}
                     </div>
                   </div>
-                  
-                  {!isBye && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
-                      <button
-                        className={`result-btn ${currentResult === "A" ? "selected" : ""}`}
-                        onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "A" }))}
-                      >
-                        ⚔️ {p.a.split(' ')[0]} Wins
-                      </button>
-                      <button
-                        className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
-                        onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
-                      >
-                        🤝 Draw
-                      </button>
-                      <button
-                        className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
-                        onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "B" }))}
-                      >
-                        ⚔️ {p.b.split(' ')[0]} Wins
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+
+          {/* Detailed Admin View */}
+          <div className="card">
+            <h2>🎴 Active Pairings (Admin)</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
+              {pairs.map((p) => {
+                const isBye = p.b === "BYE";
+                const currentResult = results[p.match_id];
+                const isCompleted = !!currentResult || isBye;
+                
+                return (
+                  <div key={p.match_id} className={`pairing-card ${isCompleted ? 'completed' : ''}`}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <div className="table-number">#{p.table}</div>
+                      {isBye && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>Auto Win</span>}
+                    </div>
+                    
+                    <div style={{ margin: '16px 0' }}>
+                      <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
+                        {currentResult === "A" && "👑 "}
+                        {p.a}
+                      </div>
+                      <div style={{ textAlign: 'center', margin: '8px 0' }}>
+                        <span className="vs-badge">VS</span>
+                      </div>
+                      <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
+                        opacity: isBye ? 0.5 : 1,
+                        fontStyle: isBye ? 'italic' : 'normal'
+                      }}>
+                        {currentResult === "B" && "👑 "}
+                        {p.b}
+                      </div>
+                    </div>
+                    
+                    {!isBye && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+                        <button
+                          className={`result-btn ${currentResult === "A" ? "selected" : ""}`}
+                          onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "A" }))}
+                        >
+                          ⚔️ {p.a.split(' ')[0]} Wins
+                        </button>
+                        <button
+                          className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
+                          onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
+                        >
+                          🤝 Draw
+                        </button>
+                        <button
+                          className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
+                          onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "B" }))}
+                        >
+                          ⚔️ {p.b.split(' ')[0]} Wins
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
       )}
 
       {standings.length > 0 && (
