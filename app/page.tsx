@@ -115,7 +115,9 @@ export default function Page() {
       const playersList = playersText
         .split("\n")
         .map((s) => s.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((s) => s.replace(/^\d+\.\s*/, '').trim()) // Remove leading numbers and dots
+        .filter(Boolean); // Filter again in case only numbers were present
       if (!playersList.length) {
         alert("Add at least one player (one per line).");
         return;
@@ -341,6 +343,7 @@ export default function Page() {
               value={playersText}
               onChange={(e) => setPlayersText(e.target.value)}
               rows={10}
+              placeholder={"1. Luigi\n2. Michael M.\n3. Mario\n4. joov\n5. Jeric\n6. JL"}
               style={{ fontFamily: 'monospace' }}
             />
           </div>
