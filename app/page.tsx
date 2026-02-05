@@ -327,6 +327,12 @@ export default function Page() {
               onChange={(e) => setRounds(Number(e.target.value))}
               min={1}
               max={20}
+              style={{ 
+                fontSize: 16,
+                padding: '16px',
+                textAlign: 'center',
+                fontWeight: 'bold'
+              }}
             />
           </div>
           <div>
@@ -335,7 +341,6 @@ export default function Page() {
               value={playersText}
               onChange={(e) => setPlayersText(e.target.value)}
               rows={10}
-              placeholder={"Luigi \nMario \nYoshi \nToad "}
               style={{ fontFamily: 'monospace' }}
             />
           </div>
