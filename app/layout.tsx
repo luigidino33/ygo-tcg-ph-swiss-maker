@@ -1,4 +1,4 @@
-export const metadata = { title: "BDC Swiss — Admin" };
+export const metadata = { title: "YGO PH Swiss Tournament Pairings" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
