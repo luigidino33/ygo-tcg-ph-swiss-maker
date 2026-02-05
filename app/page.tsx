@@ -359,9 +359,14 @@ export default function Page() {
           <div>
             <h1>⚔️ {info?.name || "Tournament"}</h1>
             {info && (
-              <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
-                Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists
-              </p>
+              <>
+                <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
+                  Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists
+                </p>
+                <p style={{ color: '#90caf9', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
+                  Tournament ID: {info.id}
+                </p>
+              </>
             )}
           </div>
           <button onClick={forgetTournament} className="secondary">
@@ -446,31 +451,19 @@ export default function Page() {
                   </div>
                   
                   <div style={{ margin: '16px 0' }}>
-                    <div>
-                      <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
-                        {currentResult === "A" && "👑 "}
-                        {p.a}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, fontFamily: 'monospace' }}>
-                        ID: {players.find((pl) => pl.name === p.a)?.id || 'N/A'}
-                      </div>
+                    <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
+                      {currentResult === "A" && "👑 "}
+                      {p.a}
                     </div>
                     <div style={{ textAlign: 'center', margin: '8px 0' }}>
                       <span className="vs-badge">VS</span>
                     </div>
-                    <div>
-                      <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
-                        opacity: isBye ? 0.5 : 1,
-                        fontStyle: isBye ? 'italic' : 'normal'
-                      }}>
-                        {currentResult === "B" && "👑 "}
-                        {p.b}
-                      </div>
-                      {!isBye && (
-                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, fontFamily: 'monospace' }}>
-                          ID: {players.find((pl) => pl.name === p.b)?.id || 'N/A'}
-                        </div>
-                      )}
+                    <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
+                      opacity: isBye ? 0.5 : 1,
+                      fontStyle: isBye ? 'italic' : 'normal'
+                    }}>
+                      {currentResult === "B" && "👑 "}
+                      {p.b}
                     </div>
                   </div>
                   
@@ -512,7 +505,6 @@ export default function Page() {
                 <tr>
                   <th style={{ width: 60 }}>Rank</th>
                   <th>Duelist</th>
-                  <th style={{ width: 100 }}>Player ID</th>
                   <th style={{ width: 80 }}>Points</th>
                   <th style={{ width: 80 }}>MW%</th>
                   <th style={{ width: 80 }}>OMW%</th>
@@ -531,9 +523,6 @@ export default function Page() {
                       {r.rank}
                     </td>
                     <td style={{ fontWeight: 'bold' }}>{r.player}</td>
-                    <td style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#94a3b8' }}>
-                      {players.find((pl) => pl.name === r.player)?.id || 'N/A'}
-                    </td>
                     <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 16 }}>
                       {r.pts}
                     </td>
