@@ -56,6 +56,8 @@ def kv_get_json(key: str):
   except Exception:
     return val
 
+TOURNAMENT_INDEX_KEY = "tournament_index"
+
 def tid_key(tid: str) -> str:
   return f"t_{tid}"
 
@@ -136,6 +138,7 @@ def opp_win_pct(p: Node) -> float:
 def compute_standings(t: dict):
   nodes = rebuild_graph(t)
   dropped = set(t.get("dropped", []))
+  deck_map = {pl["id"]: pl.get("deck", "") for pl in t.get("players", [])}
   rows = []
   for p in nodes.values():
     aa = p.match_points()
@@ -158,7 +161,8 @@ def compute_standings(t: dict):
       "player_id": p.id, "player": p.name, "pts": aa,
       "mw": round(mw, 1), "omw": round(omw, 1), "oomw": round(oomw, 1),
       "ddd": str(ddd).zfill(4), "kts": kts,
-      "dropped": p.id in dropped
+      "dropped": p.id in dropped,
+      "deck": deck_map.get(p.id, ""),
     })
   rows.sort(key=lambda r: -int(r["kts"]))
   for i, r in enumerate(rows, start=1):
@@ -461,13 +465,20 @@ def create_tournament():
       return jsonify({"error": "players list is required"}), 400
 
     tid = uuid.uuid4().hex[:10]
+    created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     tdoc = {
       "name": name,
       "total_rounds": total_rounds,
       "players": [{"id": new_id("p"), "name": n} for n in players],
-      "rounds": []
+      "rounds": [],
+      "created_at": created_at,
     }
     kv_set_json(tid_key(tid), tdoc)
+
+    # Update tournament index
+    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+    idx.append({"id": tid, "name": name, "created_at": created_at, "player_count": len(players)})
+    kv_set_json(TOURNAMENT_INDEX_KEY, idx)
 
     initial_info = {
       "id": tid,
@@ -820,5 +831,174 @@ def api_player_history(tid, pid):
       return jsonify({"error": "Unknown player_id"}), 400
     name = next((p["name"] for p in t["players"] if p["id"] == pid), pid)
     return jsonify({"player": name, "history": player_match_history(t, pid)})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── Tournament history ───────────────────────────────────────────────────────
+
+@app.get("/api/tournament-history")
+def api_tournament_history():
+  try:
+    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+    idx.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return jsonify({"tournaments": idx})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.delete("/api/tournaments/<tid>")
+def api_delete_tournament(tid):
+  try:
+    import requests as req
+    # Delete the tournament doc
+    url = f"{_kv_url()}/del/{tid_key(tid)}"
+    req.post(url, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+
+    # Remove from index
+    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+    idx = [e for e in idx if e.get("id") != tid]
+    kv_set_json(TOURNAMENT_INDEX_KEY, idx)
+
+    return jsonify({"ok": True})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── Deck archetype tagging ───────────────────────────────────────────────────
+
+@app.post("/api/tournaments/<tid>/set-deck")
+def api_set_deck(tid):
+  try:
+    body = request.get_json(force=True) or {}
+    pid = body.get("player_id")
+    deck = (body.get("deck") or "").strip()
+    if not pid:
+      return jsonify({"error": "player_id required"}), 400
+
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+
+    found = False
+    for p in t["players"]:
+      if p["id"] == pid:
+        p["deck"] = deck
+        found = True
+        break
+    if not found:
+      return jsonify({"error": "Unknown player_id"}), 400
+
+    kv_set_json(tid_key(tid), t)
+    return jsonify({"ok": True})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── Metagame breakdown ───────────────────────────────────────────────────────
+
+@app.get("/api/tournaments/<tid>/metagame")
+def api_metagame(tid):
+  try:
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+
+    nodes = rebuild_graph(t)
+    deck_stats: Dict[str, dict] = {}
+
+    for p in t["players"]:
+      deck = p.get("deck") or "Unknown"
+      if deck not in deck_stats:
+        deck_stats[deck] = {"count": 0, "wins": 0, "losses": 0}
+      deck_stats[deck]["count"] += 1
+      node = nodes.get(p["id"])
+      if node:
+        deck_stats[deck]["wins"] += node.wins_excl_bye()
+        deck_stats[deck]["losses"] += len(node.losses)
+
+    result = []
+    total_players = len(t["players"])
+    for deck, stats in sorted(deck_stats.items(), key=lambda x: -x[1]["count"]):
+      total_matches = stats["wins"] + stats["losses"]
+      result.append({
+        "deck": deck,
+        "count": stats["count"],
+        "share": round(stats["count"] / total_players * 100, 1) if total_players else 0,
+        "wins": stats["wins"],
+        "losses": stats["losses"],
+        "win_rate": round(stats["wins"] / total_matches * 100, 1) if total_matches else 0,
+      })
+
+    return jsonify({"metagame": result, "total_players": total_players})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── Cross-tournament player stats ────────────────────────────────────────────
+
+@app.get("/api/player-stats")
+def api_player_stats():
+  try:
+    player_name = request.args.get("name", "").strip()
+    if not player_name:
+      return jsonify({"error": "name query param required"}), 400
+
+    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+    stats = {
+      "name": player_name,
+      "tournaments": 0,
+      "total_wins": 0,
+      "total_losses": 0,
+      "total_byes": 0,
+      "avg_omw": 0.0,
+      "tournament_results": [],
+    }
+    omw_sum = 0.0
+    omw_count = 0
+
+    for entry in idx:
+      t = kv_get_json(tid_key(entry["id"]))
+      if not t:
+        continue
+      pid = None
+      for p in t.get("players", []):
+        if p["name"].lower() == player_name.lower():
+          pid = p["id"]
+          break
+      if not pid:
+        continue
+
+      nodes = rebuild_graph(t)
+      node = nodes.get(pid)
+      if not node:
+        continue
+
+      stats["tournaments"] += 1
+      w = node.wins_excl_bye()
+      l = len(node.losses)
+      b = node.num_byes()
+      stats["total_wins"] += w
+      stats["total_losses"] += l
+      stats["total_byes"] += b
+
+      omw = opp_win_pct(node) * 100.0
+      omw_sum += omw
+      omw_count += 1
+
+      st = compute_standings(t)
+      rank = next((r["rank"] for r in st if r["player_id"] == pid), None)
+
+      stats["tournament_results"].append({
+        "tournament_id": entry["id"],
+        "tournament_name": entry.get("name", "?"),
+        "date": entry.get("created_at", ""),
+        "wins": w,
+        "losses": l,
+        "rank": rank,
+        "total_players": len(t.get("players", [])),
+      })
+
+    total_matches = stats["total_wins"] + stats["total_losses"]
+    stats["win_rate"] = round(stats["total_wins"] / total_matches * 100, 1) if total_matches else 0
+    stats["avg_omw"] = round(omw_sum / omw_count, 1) if omw_count else 0
+    stats["tournament_results"].sort(key=lambda x: x.get("date", ""), reverse=True)
+
+    return jsonify(stats)
   except Exception as e:
     return jsonify({"error": str(e)}), 500

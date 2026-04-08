@@ -23,7 +23,41 @@ type MatchHistoryEntry = {
   match_id: string;
 };
 
-type Player = { id: string; name: string };
+type Player = { id: string; name: string; deck?: string };
+
+type TournamentHistoryEntry = {
+  id: string;
+  name: string;
+  created_at: string;
+  player_count: number;
+};
+
+type MetagameEntry = {
+  deck: string;
+  count: number;
+  share: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+};
+
+type PlayerStats = {
+  name: string;
+  tournaments: number;
+  total_wins: number;
+  total_losses: number;
+  win_rate: number;
+  avg_omw: number;
+  tournament_results: {
+    tournament_id: string;
+    tournament_name: string;
+    date: string;
+    wins: number;
+    losses: number;
+    rank: number | null;
+    total_players: number;
+  }[];
+};
 
 type TournamentInfo = {
   id: string;
@@ -106,12 +140,35 @@ export default function Page() {
   const [rounds, setRounds] = useState(4);
   const [results, setResults] = useState<Record<string, "A" | "B" | "TIE">>({});
 
+  // Tournament history
+  const [history, setHistory] = useState<TournamentHistoryEntry[]>([]);
+
+  // Metagame
+  const [metagame, setMetagame] = useState<MetagameEntry[]>([]);
+  const [showMetagame, setShowMetagame] = useState(false);
+
+  // Player stats modal (cross-tournament)
+  const [playerStats, setPlayerStats] = useState<PlayerStats | null>(null);
+  const [playerStatsLoading, setPlayerStatsLoading] = useState(false);
+
+  // Deck editing
+  const [editingDeckId, setEditingDeckId] = useState<string | null>(null);
+  const [deckInput, setDeckInput] = useState("");
+
   // Auto-suggest round count based on player count
   useEffect(() => {
     const count = playersText.split("\n").map(s => s.trim()).filter(Boolean).length;
     const suggested = suggestRounds(count);
     if (suggested !== null) setRounds(suggested);
   }, [playersText]);
+
+  // Load tournament history for home screen
+  useEffect(() => {
+    if (tid) return;
+    fetchJSON("/api/tournament-history")
+      .then((d) => setHistory(d.tournaments || []))
+      .catch(() => {});
+  }, [tid]);
 
   useEffect(() => {
     const saved = localStorage.getItem("tid");
@@ -348,6 +405,68 @@ export default function Page() {
     }
   };
 
+  const saveDeck = async (playerId: string, deck: string) => {
+    if (!tid) return;
+    try {
+      await fetchJSON(`/api/tournaments/${tid}/set-deck`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId, deck }),
+      });
+      setPlayers((prev) =>
+        prev.map((p) => (p.id === playerId ? { ...p, deck } : p))
+      );
+      setEditingDeckId(null);
+    } catch (e) {
+      alert(`Failed to save deck: ${errMsg(e)}`);
+    }
+  };
+
+  const loadMetagame = async () => {
+    if (!tid) return;
+    setShowMetagame(true);
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/metagame`);
+      setMetagame(res.metagame || []);
+    } catch (e) {
+      console.error(e);
+      setMetagame([]);
+    }
+  };
+
+  const loadPlayerStats = async (playerName: string) => {
+    setPlayerStatsLoading(true);
+    setPlayerStats(null);
+    try {
+      const res = await fetchJSON(`/api/player-stats?name=${encodeURIComponent(playerName)}`);
+      setPlayerStats(res);
+    } catch (e) {
+      console.error(e);
+      setPlayerStats(null);
+    } finally {
+      setPlayerStatsLoading(false);
+    }
+  };
+
+  const deleteTournament = async (delTid: string, delName: string) => {
+    if (!confirm(`Delete "${delName}"? This cannot be undone.`)) return;
+    try {
+      await fetchJSON(`/api/tournaments/${delTid}`, { method: "DELETE" });
+      setHistory((prev) => prev.filter((h) => h.id !== delTid));
+    } catch (e) {
+      alert(`Delete failed: ${errMsg(e)}`);
+    }
+  };
+
+  const copyShareLink = () => {
+    if (!tid) return;
+    const url = `${window.location.origin}/view/${tid}`;
+    navigator.clipboard.writeText(url).then(
+      () => alert(`Share link copied!\n${url}`),
+      () => prompt("Copy this link:", url)
+    );
+  };
+
   const editResultSave = async () => {
     if (!tid || !editMatchId) return;
     try {
@@ -476,6 +595,56 @@ export default function Page() {
             </button>
           </div>
         </div>
+
+        {history.length > 0 && (
+          <div className="card">
+            <h2>📜 Tournament History</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {history.map((h) => (
+                <div
+                  key={h.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: 12,
+                    background: "rgba(26, 35, 126, 0.4)",
+                    border: "2px solid #5c6bc0",
+                    borderRadius: 8,
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: "bold", fontSize: 14 }}>{h.name}</div>
+                    <div style={{ fontSize: 12, color: "#90caf9" }}>
+                      {h.player_count} players &bull; {h.created_at ? new Date(h.created_at).toLocaleDateString() : ""}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64b5f6", fontFamily: "monospace" }}>
+                      ID: {h.id}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      localStorage.setItem("tid", h.id);
+                      setTid(h.id);
+                      setPairs([]);
+                      setResults({});
+                    }}
+                    style={{ fontSize: 12, padding: "6px 14px" }}
+                  >
+                    Open
+                  </button>
+                  <button
+                    onClick={() => deleteTournament(h.id, h.name)}
+                    className="secondary"
+                    style={{ fontSize: 12, padding: "6px 14px", color: "#ef5350" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -497,9 +666,14 @@ export default function Page() {
               </>
             )}
           </div>
-          <button onClick={forgetTournament} className="secondary">
-            ⚙️ Close Tournament
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={copyShareLink} className="secondary">
+              🔗 Share Link
+            </button>
+            <button onClick={forgetTournament} className="secondary">
+              ⚙️ Close Tournament
+            </button>
+          </div>
         </div>
       </div>
 
@@ -519,6 +693,9 @@ export default function Page() {
           </button>
           <button onClick={() => setShowEdit((v) => !v)} disabled={!pairs.length} className="secondary">
             📝 Edit Result
+          </button>
+          <button onClick={loadMetagame} className="secondary">
+            📊 Metagame
           </button>
         </div>
 
@@ -749,6 +926,7 @@ export default function Page() {
                   <th style={{ width: 80 }}>OOMW%</th>
                   <th style={{ width: 120 }}>DDD</th>
                   <th style={{ width: 120 }}>KTS</th>
+                  <th style={{ width: 140 }}>Deck</th>
                   <th style={{ width: 80 }}>Status</th>
                 </tr>
               </thead>
@@ -779,6 +957,41 @@ export default function Page() {
                     <td style={{ textAlign: 'center' }}>{r.oomw.toFixed(1)}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.ddd}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.kts}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      {editingDeckId === r.player_id ? (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <input
+                            value={deckInput}
+                            onChange={(e) => setDeckInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveDeck(r.player_id, deckInput);
+                              if (e.key === "Escape") setEditingDeckId(null);
+                            }}
+                            placeholder="Deck name"
+                            style={{ fontSize: 11, padding: 4, marginBottom: 0, width: 100 }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => saveDeck(r.player_id, deckInput)}
+                            style={{ fontSize: 10, padding: '2px 6px' }}
+                          >
+                            OK
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          onClick={() => {
+                            const p = players.find((pl) => pl.id === r.player_id);
+                            setDeckInput(p?.deck || "");
+                            setEditingDeckId(r.player_id);
+                          }}
+                          style={{ cursor: 'pointer', fontSize: 12, color: players.find(p => p.id === r.player_id)?.deck ? '#e8eaf6' : '#64b5f6', fontStyle: players.find(p => p.id === r.player_id)?.deck ? 'normal' : 'italic' }}
+                          title="Click to edit deck"
+                        >
+                          {players.find((p) => p.id === r.player_id)?.deck || "Set deck"}
+                        </span>
+                      )}
+                    </td>
                     <td style={{ textAlign: 'center' }}>
                       {r.dropped ? (
                         <button
@@ -811,7 +1024,19 @@ export default function Page() {
           <div className="modal-content">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h2>📜 Match History — {historyPlayer.name}</h2>
-              <button onClick={() => setHistoryPlayer(null)} className="secondary">✕ Close</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    setHistoryPlayer(null);
+                    loadPlayerStats(historyPlayer.name);
+                  }}
+                  className="secondary"
+                  style={{ fontSize: 12 }}
+                >
+                  📈 All-Time Stats
+                </button>
+                <button onClick={() => setHistoryPlayer(null)} className="secondary">✕ Close</button>
+              </div>
             </div>
             {historyLoading ? (
               <p>Loading...</p>
@@ -845,6 +1070,140 @@ export default function Page() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {(playerStats || playerStatsLoading) && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2>📈 All-Time Stats{playerStats ? ` — ${playerStats.name}` : ""}</h2>
+              <button onClick={() => { setPlayerStats(null); setPlayerStatsLoading(false); }} className="secondary">✕ Close</button>
+            </div>
+            {playerStatsLoading ? (
+              <p>Loading cross-tournament data...</p>
+            ) : playerStats && playerStats.tournaments === 0 ? (
+              <p style={{ color: '#94a3b8' }}>No tournament history found for this player.</p>
+            ) : playerStats ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginBottom: 20 }}>
+                  {[
+                    { label: "Tournaments", value: playerStats.tournaments },
+                    { label: "Total Wins", value: playerStats.total_wins },
+                    { label: "Total Losses", value: playerStats.total_losses },
+                    { label: "Win Rate", value: `${playerStats.win_rate}%` },
+                    { label: "Avg OMW%", value: `${playerStats.avg_omw}%` },
+                  ].map((s) => (
+                    <div key={s.label} style={{
+                      background: 'rgba(26, 35, 126, 0.6)',
+                      border: '1px solid #5c6bc0',
+                      borderRadius: 8,
+                      padding: 12,
+                      textAlign: 'center',
+                    }}>
+                      <div style={{ fontSize: 11, color: '#90caf9', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                      <div style={{ fontSize: 22, fontWeight: 'bold', marginTop: 4 }}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+                <h3>Tournament Results</h3>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Tournament</th>
+                      <th style={{ width: 100 }}>Date</th>
+                      <th style={{ width: 80 }}>Record</th>
+                      <th style={{ width: 80 }}>Rank</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {playerStats.tournament_results.map((t) => (
+                      <tr key={t.tournament_id}>
+                        <td style={{ fontWeight: 'bold' }}>{t.tournament_name}</td>
+                        <td style={{ textAlign: 'center', fontSize: 12 }}>
+                          {t.date ? new Date(t.date).toLocaleDateString() : ""}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>{t.wins}W-{t.losses}L</td>
+                        <td style={{ textAlign: 'center' }}>
+                          {t.rank !== null ? `${t.rank}/${t.total_players}` : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {showMetagame && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2>📊 Metagame Breakdown</h2>
+              <button onClick={() => setShowMetagame(false)} className="secondary">✕ Close</button>
+            </div>
+            {metagame.length === 0 ? (
+              <p style={{ color: '#94a3b8' }}>No deck data yet. Tag player decks in the standings table first.</p>
+            ) : (
+              <>
+                {/* Pie chart */}
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24 }}>
+                  <svg viewBox="-1.1 -1.1 2.2 2.2" width={220} height={220}>
+                    {(() => {
+                      const COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
+                      const total = metagame.reduce((s, m) => s + m.count, 0);
+                      let cumAngle = -Math.PI / 2;
+                      return metagame.map((m, i) => {
+                        const angle = (m.count / total) * 2 * Math.PI;
+                        const x1 = Math.cos(cumAngle);
+                        const y1 = Math.sin(cumAngle);
+                        cumAngle += angle;
+                        const x2 = Math.cos(cumAngle);
+                        const y2 = Math.sin(cumAngle);
+                        const largeArc = angle > Math.PI ? 1 : 0;
+                        const d = `M0,0 L${x1},${y1} A1,1 0 ${largeArc},1 ${x2},${y2} Z`;
+                        return <path key={i} d={d} fill={COLORS[i % COLORS.length]} stroke="#0c1445" strokeWidth={0.02} />;
+                      });
+                    })()}
+                  </svg>
+                </div>
+                {/* Legend + stats table */}
+                <table>
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>Deck</th>
+                      <th style={{ width: 60 }}>Count</th>
+                      <th style={{ width: 70 }}>Share</th>
+                      <th style={{ width: 80 }}>Record</th>
+                      <th style={{ width: 80 }}>Win Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metagame.map((m, i) => {
+                      const COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
+                      return (
+                        <tr key={m.deck}>
+                          <td style={{ textAlign: 'center' }}>
+                            <div style={{ width: 14, height: 14, borderRadius: 3, background: COLORS[i % COLORS.length], display: 'inline-block' }} />
+                          </td>
+                          <td style={{ fontWeight: 'bold' }}>{m.deck}</td>
+                          <td style={{ textAlign: 'center' }}>{m.count}</td>
+                          <td style={{ textAlign: 'center' }}>{m.share}%</td>
+                          <td style={{ textAlign: 'center' }}>{m.wins}W-{m.losses}L</td>
+                          <td style={{ textAlign: 'center', fontWeight: 'bold', color: m.win_rate >= 50 ? '#81c784' : '#ef5350' }}>
+                            {m.win_rate}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
             )}
           </div>
         </div>
