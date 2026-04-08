@@ -287,7 +287,7 @@ export default function Page() {
   const handleSavePairings = async (pairsToSave: LocalPair[]) => {
     if (!tid) return;
     try {
-      await fetchJSON(`/api/tournaments/${tid}/manual-pair`, {
+      await fetchJSON(`/api/tournaments/${tid}/edit-pairings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pairs: pairsToSave }),
@@ -426,7 +426,7 @@ export default function Page() {
                   <option value="PENDING">Pending</option>
                   <option value="A">Player A Won</option>
                   <option value="B">Player B Won</option>
-                  <option value="TIE">Tie</option>
+                  <option value="TIE">Double Loss</option>
                 </select>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -524,7 +524,7 @@ export default function Page() {
                           textTransform: 'uppercase',
                           letterSpacing: 0.5
                         }}>
-                          {isBye ? "BYE" : currentResult === "TIE" ? "DRAW" : "DONE"}
+                          {isBye ? "BYE" : currentResult === "TIE" ? "DBL LOSS" : "DONE"}
                         </div>
                       ) : (
                         <div style={{
@@ -593,7 +593,7 @@ export default function Page() {
                           className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
                           onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
                         >
-                          🤝 Draw
+                          💀 Double Loss
                         </button>
                         <button
                           className={`result-btn ${currentResult === "B" ? "selected" : ""}`}

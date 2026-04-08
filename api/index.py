@@ -121,7 +121,8 @@ def rebuild_graph(t: dict) -> Dict[str, Node]:
       elif r == "B":
         b.wins.append(a); a.losses.append(b); a.lost_rounds.append(n)
       elif r == "TIE":
-        a.ties.append(b); b.ties.append(a)
+        a.losses.append(b); b.losses.append(a)
+        a.lost_rounds.append(n); b.lost_rounds.append(n)
   return players
 
 def opp_win_pct(p: Node) -> float:
@@ -470,7 +471,7 @@ def api_edit_result(tid):
     body = request.get_json(silent=True) or {}
     mid = body.get("match_id")
     res = body.get("result")
-    if not mid or res not in {"A", "B", "DRAW", "PENDING", "BYE"}:
+    if not mid or res not in {"A", "B", "TIE", "PENDING", "BYE"}:
       return jsonify({"ok": False, "message": "Provide match_id and valid result."}), 400
 
     t = read_tdoc_or_retry(tid)
