@@ -56,6 +56,14 @@ def kv_get_json(key: str):
   except Exception:
     return val
 
+def kv_keys(pattern: str) -> list[str]:
+  import requests
+  url = f"{_kv_url()}/keys/{pattern}"
+  r = requests.get(url, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+  r.raise_for_status()
+  data = r.json()
+  return data.get("result", [])
+
 TOURNAMENT_INDEX_KEY = "tournament_index"
 
 def tid_key(tid: str) -> str:
@@ -836,11 +844,31 @@ def api_player_history(tid, pid):
 
 # ── Tournament history ───────────────────────────────────────────────────────
 
+def _rebuild_tournament_index() -> list[dict]:
+  """Scan all t_* keys in KV and rebuild the tournament index."""
+  keys = kv_keys("t_*")
+  idx = []
+  for key in keys:
+    if key in ("tournament_index", "health_probe"):
+      continue
+    tid = key[2:]  # strip "t_" prefix
+    t = kv_get_json(key)
+    if not t or not isinstance(t, dict) or "players" not in t:
+      continue
+    idx.append({
+      "id": tid,
+      "name": t.get("name", "Unknown"),
+      "created_at": t.get("created_at", ""),
+      "player_count": len(t.get("players", [])),
+    })
+  idx.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+  kv_set_json(TOURNAMENT_INDEX_KEY, idx)
+  return idx
+
 @app.get("/api/tournament-history")
 def api_tournament_history():
   try:
-    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
-    idx.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    idx = _rebuild_tournament_index()
     return jsonify({"tournaments": idx})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
