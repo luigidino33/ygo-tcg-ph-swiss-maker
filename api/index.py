@@ -135,6 +135,7 @@ def opp_win_pct(p: Node) -> float:
 
 def compute_standings(t: dict):
   nodes = rebuild_graph(t)
+  dropped = set(t.get("dropped", []))
   rows = []
   for p in nodes.values():
     aa = p.match_points()
@@ -156,12 +157,42 @@ def compute_standings(t: dict):
     rows.append({
       "player_id": p.id, "player": p.name, "pts": aa,
       "mw": round(mw, 1), "omw": round(omw, 1), "oomw": round(oomw, 1),
-      "ddd": str(ddd).zfill(4), "kts": kts
+      "ddd": str(ddd).zfill(4), "kts": kts,
+      "dropped": p.id in dropped
     })
   rows.sort(key=lambda r: -int(r["kts"]))
   for i, r in enumerate(rows, start=1):
     r["rank"] = i
   return rows
+
+def player_match_history(t: dict, player_id: str) -> list[dict]:
+  id2name = {p["id"]: p["name"] for p in t["players"]}
+  history = []
+  for rnd in t.get("rounds", []):
+    for m in rnd["matches"]:
+      if m["a"] != player_id and m.get("b") != player_id:
+        continue
+      r = m["r"]
+      if r == "PENDING":
+        result = "Pending"
+      elif r == "BYE":
+        result = "BYE (Win)"
+      elif r == "TIE":
+        result = "Double Loss"
+      elif r == "A":
+        result = "Win" if m["a"] == player_id else "Loss"
+      elif r == "B":
+        result = "Win" if m.get("b") == player_id else "Loss"
+      else:
+        result = r
+      opponent_id = m.get("b") if m["a"] == player_id else m["a"]
+      history.append({
+        "round": rnd["n"],
+        "opponent": id2name.get(opponent_id, "BYE") if opponent_id else "BYE",
+        "result": result,
+        "match_id": m["id"]
+      })
+  return history
 
 def current_round_number(t: dict) -> int:
   return max([r["n"] for r in t.get("rounds", [])], default=0)
@@ -311,8 +342,9 @@ def pair_next(t: dict) -> tuple[int, list[dict]]:
   prior = prior_pairs_set(t)
   curr_round = current_round_number(t)
 
-  # List of all player IDs
-  all_ids = [p["id"] for p in t["players"]]
+  dropped = set(t.get("dropped", []))
+  # List of active (non-dropped) player IDs
+  all_ids = [p["id"] for p in t["players"] if p["id"] not in dropped]
 
   # ── ROUND 1: PURE RANDOM PAIRINGS ────────────────────────────────────────
   if curr_round == 0:
@@ -460,6 +492,7 @@ def get_tournament(tid):
       "total_rounds": t["total_rounds"],
       "round": current_round_number(t),
       "players": t.get("players", []),
+      "dropped": t.get("dropped", []),
     })
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -694,5 +727,98 @@ def api_restart_round(tid):
     kv_set_json(tid_key(tid), t)
 
     return jsonify({"ok": True, "round": last["n"], "pairs": pairs_for_ui(t)})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/tournaments/<tid>/drop-player")
+def api_drop_player(tid):
+  try:
+    body = request.get_json(force=True) or {}
+    pid = body.get("player_id")
+    if not pid:
+      return jsonify({"error": "player_id required"}), 400
+
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+
+    valid_ids = {p["id"] for p in t.get("players", [])}
+    if pid not in valid_ids:
+      return jsonify({"error": "Unknown player_id"}), 400
+
+    dropped = t.get("dropped", [])
+    if pid in dropped:
+      return jsonify({"ok": True, "message": "Player already dropped."})
+
+    dropped.append(pid)
+    t["dropped"] = dropped
+    kv_set_json(tid_key(tid), t)
+
+    name = next((p["name"] for p in t["players"] if p["id"] == pid), pid)
+    return jsonify({"ok": True, "message": f"{name} has been dropped.", "standings": compute_standings(t)})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/tournaments/<tid>/undrop-player")
+def api_undrop_player(tid):
+  try:
+    body = request.get_json(force=True) or {}
+    pid = body.get("player_id")
+    if not pid:
+      return jsonify({"error": "player_id required"}), 400
+
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+
+    dropped = t.get("dropped", [])
+    if pid not in dropped:
+      return jsonify({"ok": True, "message": "Player is not dropped."})
+
+    dropped.remove(pid)
+    t["dropped"] = dropped
+    kv_set_json(tid_key(tid), t)
+
+    name = next((p["name"] for p in t["players"] if p["id"] == pid), pid)
+    return jsonify({"ok": True, "message": f"{name} has been reinstated.", "standings": compute_standings(t)})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/tournaments/<tid>/undo-finalize")
+def api_undo_finalize(tid):
+  try:
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    if not t.get("rounds"):
+      return jsonify({"error": "No rounds to undo."}), 400
+
+    last = t["rounds"][-1]
+    # Check that the round IS finalized (has non-PENDING/BYE results)
+    has_results = any(m.get("r") not in ("PENDING", "BYE") for m in last.get("matches", []))
+    if not has_results:
+      return jsonify({"error": "Current round is not finalized yet."}), 400
+
+    # Reset all non-BYE matches back to PENDING
+    for m in last["matches"]:
+      if m.get("r") not in ("BYE",):
+        m["r"] = "PENDING"
+
+    kv_set_json(tid_key(tid), t)
+    return jsonify({"ok": True, "round": last["n"], "pairs": pairs_for_ui(t), "standings": compute_standings(t)})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.get("/api/tournaments/<tid>/player-history/<pid>")
+def api_player_history(tid, pid):
+  try:
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    valid_ids = {p["id"] for p in t.get("players", [])}
+    if pid not in valid_ids:
+      return jsonify({"error": "Unknown player_id"}), 400
+    name = next((p["name"] for p in t["players"] if p["id"] == pid), pid)
+    return jsonify({"player": name, "history": player_match_history(t, pid)})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
