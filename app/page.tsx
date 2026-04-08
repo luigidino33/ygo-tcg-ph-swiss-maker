@@ -6,12 +6,21 @@ type Pair = { table: number; a: string; b: string; match_id: string };
 type StandRow = {
   rank: number;
   player: string;
+  player_id: string;
   pts: number;
   mw: number;
   omw: number;
   oomw: number;
   ddd: string;
   kts: string;
+  dropped: boolean;
+};
+
+type MatchHistoryEntry = {
+  round: number;
+  opponent: string;
+  result: string;
+  match_id: string;
 };
 
 type Player = { id: string; name: string };
@@ -22,6 +31,7 @@ type TournamentInfo = {
   total_rounds: number;
   round: number;
   players?: Player[];
+  dropped?: string[];
 };
 
 type LocalPair = {
@@ -39,6 +49,19 @@ function errMsg(e: unknown): string {
   } catch {
     return String(e);
   }
+}
+
+// Official KDE-US Tournament Policy round count table
+function suggestRounds(playerCount: number): number | null {
+  if (playerCount < 4) return null;
+  if (playerCount <= 8) return 3;
+  if (playerCount <= 16) return 4;
+  if (playerCount <= 32) return 5;
+  if (playerCount <= 64) return 6;
+  if (playerCount <= 128) return 7;
+  if (playerCount <= 256) return 8;
+  if (playerCount <= 512) return 9;
+  return 10;
 }
 
 const fetchJSON = async (url: string, init?: RequestInit) => {
@@ -71,12 +94,24 @@ export default function Page() {
   // Admin manual pair editor
   const [showPairEditor, setShowPairEditor] = useState(false);
 
+  // Match history modal
+  const [historyPlayer, setHistoryPlayer] = useState<{ name: string; id: string } | null>(null);
+  const [historyData, setHistoryData] = useState<MatchHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   const [pairing, setPairing] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [playersText, setPlayersText] = useState("");
   const [name, setName] = useState("BDC Weekly");
   const [rounds, setRounds] = useState(4);
   const [results, setResults] = useState<Record<string, "A" | "B" | "TIE">>({});
+
+  // Auto-suggest round count based on player count
+  useEffect(() => {
+    const count = playersText.split("\n").map(s => s.trim()).filter(Boolean).length;
+    const suggested = suggestRounds(count);
+    if (suggested !== null) setRounds(suggested);
+  }, [playersText]);
 
   useEffect(() => {
     const saved = localStorage.getItem("tid");
@@ -240,6 +275,79 @@ export default function Page() {
     }
   };
 
+  const undoFinalize = async () => {
+    if (!tid) return;
+    if (!confirm("Undo finalize? This will reopen the current round for editing.")) return;
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/undo-finalize`, { method: "POST" });
+      if (!res.ok) throw new Error(res.error || res.message || "Undo failed");
+      setPairs(res.pairs || []);
+      setStandings(res.standings || []);
+      setResults({});
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+    } catch (e) {
+      console.error(e);
+      alert(`Undo failed: ${errMsg(e)}`);
+    }
+  };
+
+  const dropPlayer = async (playerId: string, playerName: string) => {
+    if (!tid) return;
+    if (!confirm(`Drop ${playerName} from the tournament? They won't be paired in future rounds.`)) return;
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/drop-player`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId }),
+      });
+      if (!res.ok) throw new Error(res.message || "Drop failed");
+      setStandings(res.standings || []);
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+    } catch (e) {
+      console.error(e);
+      alert(`Drop failed: ${errMsg(e)}`);
+    }
+  };
+
+  const undropPlayer = async (playerId: string, playerName: string) => {
+    if (!tid) return;
+    if (!confirm(`Reinstate ${playerName} into the tournament?`)) return;
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/undrop-player`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId }),
+      });
+      if (!res.ok) throw new Error(res.message || "Undrop failed");
+      setStandings(res.standings || []);
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+    } catch (e) {
+      console.error(e);
+      alert(`Reinstate failed: ${errMsg(e)}`);
+    }
+  };
+
+  const showPlayerHistory = async (playerId: string, playerName: string) => {
+    if (!tid) return;
+    setHistoryPlayer({ id: playerId, name: playerName });
+    setHistoryLoading(true);
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/player-history/${playerId}`);
+      setHistoryData(res.history || []);
+    } catch (e) {
+      console.error(e);
+      setHistoryData([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   const editResultSave = async () => {
     if (!tid || !editMatchId) return;
     try {
@@ -329,13 +437,25 @@ export default function Page() {
               onChange={(e) => setRounds(Number(e.target.value))}
               min={1}
               max={20}
-              style={{ 
+              style={{
                 fontSize: 16,
                 padding: '16px',
                 textAlign: 'center',
                 fontWeight: 'bold'
               }}
             />
+            {(() => {
+              const count = playersText.split("\n").map(s => s.trim()).filter(Boolean).length;
+              const suggested = suggestRounds(count);
+              if (suggested !== null) {
+                return (
+                  <p style={{ color: '#90caf9', fontSize: 12, marginTop: 4 }}>
+                    Auto-suggested: {suggested} rounds for {count} players (per KDE-US policy)
+                  </p>
+                );
+              }
+              return null;
+            })()}
           </div>
           <div>
             <label>Players (one per line)</label>
@@ -390,6 +510,9 @@ export default function Page() {
           </button>
           <button onClick={finalizeRound} disabled={!pairs.length || finalizing} className="success">
             {finalizing ? "⏳ Finalizing..." : "✅ Finalize Round"}
+          </button>
+          <button onClick={undoFinalize} disabled={pairs.length > 0 || !info?.round} className="secondary">
+            ↩️ Undo Finalize
           </button>
           <button onClick={() => setShowPairEditor(true)} disabled={!players.length} className="secondary">
             ✏️ Edit Pairings
@@ -626,18 +749,28 @@ export default function Page() {
                   <th style={{ width: 80 }}>OOMW%</th>
                   <th style={{ width: 120 }}>DDD</th>
                   <th style={{ width: 120 }}>KTS</th>
+                  <th style={{ width: 80 }}>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {standings.map((r) => (
-                  <tr key={r.rank} className={`rank-${r.rank}`}>
+                  <tr key={r.rank} className={`rank-${r.rank}`} style={{ opacity: r.dropped ? 0.5 : 1 }}>
                     <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 18 }}>
                       {r.rank === 1 && '🥇 '}
                       {r.rank === 2 && '🥈 '}
                       {r.rank === 3 && '🥉 '}
                       {r.rank}
                     </td>
-                    <td style={{ fontWeight: 'bold' }}>{r.player}</td>
+                    <td>
+                      <span
+                        onClick={() => showPlayerHistory(r.player_id, r.player)}
+                        style={{ fontWeight: 'bold', cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                        title="View match history"
+                      >
+                        {r.player}
+                      </span>
+                      {r.dropped && <span style={{ color: '#ef5350', fontSize: 11, marginLeft: 8 }}>DROPPED</span>}
+                    </td>
                     <td style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 16 }}>
                       {r.pts}
                     </td>
@@ -646,10 +779,73 @@ export default function Page() {
                     <td style={{ textAlign: 'center' }}>{r.oomw.toFixed(1)}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.ddd}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.kts}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      {r.dropped ? (
+                        <button
+                          onClick={() => undropPlayer(r.player_id, r.player)}
+                          className="secondary"
+                          style={{ fontSize: 10, padding: '3px 8px' }}
+                        >
+                          Reinstate
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => dropPlayer(r.player_id, r.player)}
+                          className="secondary"
+                          style={{ fontSize: 10, padding: '3px 8px', color: '#ef5350' }}
+                        >
+                          Drop
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {historyPlayer && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2>📜 Match History — {historyPlayer.name}</h2>
+              <button onClick={() => setHistoryPlayer(null)} className="secondary">✕ Close</button>
+            </div>
+            {historyLoading ? (
+              <p>Loading...</p>
+            ) : historyData.length === 0 ? (
+              <p style={{ color: '#94a3b8' }}>No matches played yet.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: 80 }}>Round</th>
+                    <th>Opponent</th>
+                    <th style={{ width: 120 }}>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyData.map((h) => (
+                    <tr key={h.match_id}>
+                      <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{h.round}</td>
+                      <td>{h.opponent}</td>
+                      <td style={{
+                        textAlign: 'center',
+                        fontWeight: 'bold',
+                        color: h.result === 'Win' || h.result === 'BYE (Win)' ? '#81c784'
+                          : h.result === 'Loss' ? '#ef5350'
+                          : h.result === 'Double Loss' ? '#ff9800'
+                          : '#90caf9'
+                      }}>
+                        {h.result}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}
