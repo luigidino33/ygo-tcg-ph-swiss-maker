@@ -81,7 +81,6 @@ class Node:
   name: str
   wins: List[object] = field(default_factory=list)    # Node or "BYE"
   losses: List[object] = field(default_factory=list)  # Node
-  ties: List[object] = field(default_factory=list)    # Node
   lost_rounds: List[int] = field(default_factory=list)
 
   def num_byes(self) -> int:
@@ -91,7 +90,7 @@ class Node:
     return sum(1 for w in self.wins if w != "BYE")
 
   def matches_played_excl_bye(self) -> int:
-    return self.wins_excl_bye() + len(self.losses) + len(self.ties)
+    return self.wins_excl_bye() + len(self.losses)
 
   def match_points(self) -> int:
     # Win=3, Tie=0, Loss=0; BYE counts as Win for points
@@ -127,7 +126,7 @@ def rebuild_graph(t: dict) -> Dict[str, Node]:
 
 def opp_win_pct(p: Node) -> float:
   tot, num = 0.0, 0
-  for opp in p.wins + p.losses + p.ties:
+  for opp in p.wins + p.losses:
     if opp == "BYE":
       continue
     tot += opp.match_win_pct()
@@ -139,15 +138,15 @@ def compute_standings(t: dict):
   rows = []
   for p in nodes.values():
     aa = p.match_points()
-    bbb = max(0, min(999, int(round(opp_win_pct(p), 3) * 1000)))
+    bbb = max(0, int(round(opp_win_pct(p), 3) * 1000))
     acc, nopp = 0.0, 0
-    for opp in p.wins + p.losses + p.ties:
+    for opp in p.wins + p.losses:
       if opp == "BYE":
         continue
       acc += opp_win_pct(opp); nopp += 1
-    ccc = max(0, min(999, int(round((acc / nopp) if nopp else 0.0, 3) * 1000)))
-    ddd = min(999, sum(r * r for r in p.lost_rounds))
-    kts = f"{aa}{str(bbb).zfill(3)}{str(ccc).zfill(3)}{str(ddd).zfill(3)}"
+    ccc = max(0, int(round((acc / nopp) if nopp else 0.0, 3) * 1000))
+    ddd = sum(r * r for r in p.lost_rounds)
+    kts = f"{str(aa).zfill(2)}{str(bbb).zfill(4)}{str(ccc).zfill(4)}{str(ddd).zfill(4)}"
 
     d = p.matches_played_excl_bye()
     mw = (p.wins_excl_bye() / d * 100.0) if d else 0.0
@@ -157,7 +156,7 @@ def compute_standings(t: dict):
     rows.append({
       "player_id": p.id, "player": p.name, "pts": aa,
       "mw": round(mw, 1), "omw": round(omw, 1), "oomw": round(oomw, 1),
-      "ddd": str(ddd).zfill(3), "kts": kts
+      "ddd": str(ddd).zfill(4), "kts": kts
     })
   rows.sort(key=lambda r: -int(r["kts"]))
   for i, r in enumerate(rows, start=1):
