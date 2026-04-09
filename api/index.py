@@ -274,7 +274,7 @@ def _build_brackets(ids: list[str], pts_by_id: dict, kts_by_id: dict, id2name: d
     brackets.append(bucket)
   return brackets
 
-def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) -> Optional[list[tuple[str, str]]]:
+def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]], allow_rematches: bool = False) -> Optional[list[tuple[str, str]]]:
   n = len(order)
   used = [False] * n
   pairs: list[tuple[str, str]] = []
@@ -291,19 +291,10 @@ def _pair_within_bracket(order: list[str], prior_pairs: set[tuple[str, str]]) ->
       if used[j]:
         continue
       a, b = order[i], order[j]
-      key = (a, b) if a < b else (b, a)
-      if key in prior_lookup:
-        continue
-      used[j] = True
-      pairs.append((a, b))
-      if bt(i + 1):
-        return True
-      pairs.pop()
-      used[j] = False
-    for j in range(i + 1, n):
-      if used[j]:
-        continue
-      a, b = order[i], order[j]
+      if not allow_rematches:
+        key = (a, b) if a < b else (b, a)
+        if key in prior_lookup:
+          continue
       used[j] = True
       pairs.append((a, b))
       if bt(i + 1):
@@ -341,6 +332,15 @@ def _pair_brackets(brackets: list[list[str]], prior_pairs: set[tuple[str, str]])
       if len(work) % 2 == 1:
         if work:
           carry_down = [work.pop()] + carry_down
+
+  # If carry_down still has unpaired players after all brackets, we must allow
+  # rematches as a last resort (e.g. 4 players, 4+ rounds — rematches are inevitable)
+  if carry_down:
+    all_remaining = carry_down
+    res = _pair_within_bracket(all_remaining, prior_pairs, allow_rematches=True)
+    if res:
+      pairs.extend(res)
+
   return pairs
 
 def pair_next(t: dict) -> tuple[int, list[dict]]:
