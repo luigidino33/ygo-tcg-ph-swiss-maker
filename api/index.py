@@ -1030,3 +1030,119 @@ def api_player_stats():
     return jsonify(stats)
   except Exception as e:
     return jsonify({"error": str(e)}), 500
+
+# ── Admin auth ───────────────────────────────────────────────────────────────
+
+@app.post("/api/admin/auth")
+def api_admin_auth():
+  try:
+    body = request.get_json(force=True) or {}
+    password = body.get("password", "")
+    admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+    if not admin_pw:
+      return jsonify({"ok": False, "message": "ADMIN_PASSWORD not configured on server."}), 500
+    if password == admin_pw:
+      return jsonify({"ok": True})
+    return jsonify({"ok": False, "message": "Incorrect password."}), 401
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── All-player leaderboard ───────────────────────────────────────────────────
+
+@app.get("/api/all-player-stats")
+def api_all_player_stats():
+  try:
+    idx = _rebuild_tournament_index()
+    # Aggregate stats per unique player name (case-insensitive)
+    player_map: Dict[str, dict] = {}
+
+    for entry in idx:
+      t = kv_get_json(tid_key(entry["id"]))
+      if not t:
+        continue
+      nodes = rebuild_graph(t)
+
+      for p in t.get("players", []):
+        node = nodes.get(p["id"])
+        if not node:
+          continue
+        name_key = p["name"].strip().lower()
+        display_name = p["name"].strip()
+        if name_key not in player_map:
+          player_map[name_key] = {
+            "name": display_name,
+            "tournaments": 0,
+            "wins": 0,
+            "losses": 0,
+            "byes": 0,
+            "omw_sum": 0.0,
+            "omw_count": 0,
+          }
+        s = player_map[name_key]
+        s["tournaments"] += 1
+        s["wins"] += node.wins_excl_bye()
+        s["losses"] += len(node.losses)
+        s["byes"] += node.num_byes()
+        omw = opp_win_pct(node) * 100.0
+        s["omw_sum"] += omw
+        s["omw_count"] += 1
+
+    result = []
+    for s in player_map.values():
+      total = s["wins"] + s["losses"]
+      result.append({
+        "name": s["name"],
+        "tournaments": s["tournaments"],
+        "wins": s["wins"],
+        "losses": s["losses"],
+        "win_rate": round(s["wins"] / total * 100, 1) if total else 0,
+        "avg_omw": round(s["omw_sum"] / s["omw_count"], 1) if s["omw_count"] else 0,
+      })
+
+    result.sort(key=lambda x: (-x["wins"], -x["win_rate"], x["name"]))
+    return jsonify({"players": result})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── Global metagame across all tournaments ───────────────────────────────────
+
+@app.get("/api/global-metagame")
+def api_global_metagame():
+  try:
+    idx = _rebuild_tournament_index()
+    deck_stats: Dict[str, dict] = {}
+    total_tagged = 0
+
+    for entry in idx:
+      t = kv_get_json(tid_key(entry["id"]))
+      if not t:
+        continue
+      nodes = rebuild_graph(t)
+      for p in t.get("players", []):
+        deck = p.get("deck") or ""
+        if not deck:
+          continue
+        total_tagged += 1
+        if deck not in deck_stats:
+          deck_stats[deck] = {"count": 0, "wins": 0, "losses": 0}
+        deck_stats[deck]["count"] += 1
+        node = nodes.get(p["id"])
+        if node:
+          deck_stats[deck]["wins"] += node.wins_excl_bye()
+          deck_stats[deck]["losses"] += len(node.losses)
+
+    result = []
+    for deck, stats in sorted(deck_stats.items(), key=lambda x: -x[1]["count"]):
+      total_matches = stats["wins"] + stats["losses"]
+      result.append({
+        "deck": deck,
+        "count": stats["count"],
+        "share": round(stats["count"] / total_tagged * 100, 1) if total_tagged else 0,
+        "wins": stats["wins"],
+        "losses": stats["losses"],
+        "win_rate": round(stats["wins"] / total_matches * 100, 1) if total_matches else 0,
+      })
+
+    return jsonify({"metagame": result, "total_tagged": total_tagged})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
