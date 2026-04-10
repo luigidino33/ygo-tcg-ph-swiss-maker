@@ -531,7 +531,7 @@ function AdminDashboard() {
   const exportStandingsImage = () => {
     if (!standings.length || !info) return;
     const dpr = window.devicePixelRatio || 1;
-    const W = 800;
+    const W = 900;
     const rowH = 36;
     const headerH = 80;
     const tableHeaderH = 32;
@@ -570,14 +570,14 @@ function AdminDashboard() {
 
     // Table header
     const cols = [
-      { label: "Rank", x: 40, w: 50, align: "center" as CanvasTextAlign },
-      { label: "Duelist", x: 100, w: 220, align: "left" as CanvasTextAlign },
-      { label: "Pts", x: 330, w: 50, align: "center" as CanvasTextAlign },
-      { label: "MW%", x: 390, w: 60, align: "center" as CanvasTextAlign },
-      { label: "OMW%", x: 460, w: 60, align: "center" as CanvasTextAlign },
-      { label: "OOMW%", x: 530, w: 70, align: "center" as CanvasTextAlign },
-      { label: "Deck", x: 610, w: 130, align: "center" as CanvasTextAlign },
-      { label: "KTS", x: 740, w: 50, align: "center" as CanvasTextAlign },
+      { label: "Rank", x: 30, w: 45, align: "center" as CanvasTextAlign },
+      { label: "Duelist", x: 80, w: 200, align: "left" as CanvasTextAlign },
+      { label: "Pts", x: 290, w: 45, align: "center" as CanvasTextAlign },
+      { label: "MW%", x: 345, w: 55, align: "center" as CanvasTextAlign },
+      { label: "OMW%", x: 410, w: 55, align: "center" as CanvasTextAlign },
+      { label: "OOMW%", x: 475, w: 60, align: "center" as CanvasTextAlign },
+      { label: "Deck", x: 545, w: 130, align: "center" as CanvasTextAlign },
+      { label: "KTS", x: 685, w: 190, align: "center" as CanvasTextAlign },
     ];
 
     // Header bar
