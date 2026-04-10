@@ -528,6 +528,144 @@ function AdminDashboard() {
     );
   };
 
+  const exportStandingsImage = () => {
+    if (!standings.length || !info) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = 800;
+    const rowH = 36;
+    const headerH = 80;
+    const tableHeaderH = 32;
+    const footerH = 40;
+    const padTop = 24;
+    const H = padTop + headerH + tableHeaderH + standings.length * rowH + footerH;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    const ctx = canvas.getContext("2d")!;
+    ctx.scale(dpr, dpr);
+
+    // Background
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, "#0c1445");
+    bg.addColorStop(0.5, "#1a237e");
+    bg.addColorStop(1, "#283593");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    // Title
+    let y = padTop;
+    ctx.fillStyle = "#e1f5fe";
+    ctx.font = "bold 28px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(info.name || "Tournament", W / 2, y + 30);
+
+    ctx.fillStyle = "#90caf9";
+    ctx.font = "14px Segoe UI, sans-serif";
+    ctx.fillText(
+      `Round ${info.round} of ${info.total_rounds}  \u2022  ${info.players?.length || 0} Duelists`,
+      W / 2, y + 55
+    );
+    y += headerH;
+
+    // Table header
+    const cols = [
+      { label: "Rank", x: 40, w: 50, align: "center" as CanvasTextAlign },
+      { label: "Duelist", x: 100, w: 220, align: "left" as CanvasTextAlign },
+      { label: "Pts", x: 330, w: 50, align: "center" as CanvasTextAlign },
+      { label: "MW%", x: 390, w: 60, align: "center" as CanvasTextAlign },
+      { label: "OMW%", x: 460, w: 60, align: "center" as CanvasTextAlign },
+      { label: "OOMW%", x: 530, w: 70, align: "center" as CanvasTextAlign },
+      { label: "Deck", x: 610, w: 130, align: "center" as CanvasTextAlign },
+      { label: "KTS", x: 740, w: 50, align: "center" as CanvasTextAlign },
+    ];
+
+    // Header bar
+    const hdrGrad = ctx.createLinearGradient(20, y, 20, y + tableHeaderH);
+    hdrGrad.addColorStop(0, "#64b5f6");
+    hdrGrad.addColorStop(1, "#90caf9");
+    ctx.fillStyle = hdrGrad;
+    ctx.beginPath();
+    ctx.roundRect(20, y, W - 40, tableHeaderH, 6);
+    ctx.fill();
+
+    ctx.fillStyle = "#0c1445";
+    ctx.font = "bold 11px Segoe UI, sans-serif";
+    for (const col of cols) {
+      ctx.textAlign = col.align;
+      const tx = col.align === "center" ? col.x + col.w / 2 : col.x;
+      ctx.fillText(col.label.toUpperCase(), tx, y + 21);
+    }
+    y += tableHeaderH;
+
+    // Rows
+    const medals = ["\u{1F947}", "\u{1F948}", "\u{1F949}"];
+    for (const r of standings) {
+      // Alternating row bg
+      if (r.rank % 2 === 0) {
+        ctx.fillStyle = "rgba(100, 181, 246, 0.07)";
+        ctx.fillRect(20, y, W - 40, rowH);
+      }
+
+      // Rank highlight for top 3
+      if (r.rank <= 3) {
+        const gold = ["rgba(255,215,0,0.15)", "rgba(192,192,192,0.15)", "rgba(205,127,50,0.15)"];
+        ctx.fillStyle = gold[r.rank - 1];
+        ctx.fillRect(20, y, W - 40, rowH);
+      }
+
+      const opacity = r.dropped ? 0.4 : 1.0;
+      ctx.globalAlpha = opacity;
+
+      ctx.font = "bold 14px Segoe UI, sans-serif";
+      ctx.fillStyle = "#e8eaf6";
+      ctx.textAlign = "center";
+      ctx.fillText(`${r.rank}`, cols[0].x + cols[0].w / 2, y + 23);
+
+      ctx.textAlign = "left";
+      ctx.fillText(r.player, cols[1].x, y + 23);
+      if (r.dropped) {
+        ctx.fillStyle = "#ef5350";
+        ctx.font = "bold 9px Segoe UI, sans-serif";
+        ctx.fillText("DROPPED", cols[1].x + ctx.measureText(r.player).width + 6, y + 23);
+      }
+
+      ctx.font = "bold 14px Segoe UI, sans-serif";
+      ctx.fillStyle = "#e8eaf6";
+      ctx.textAlign = "center";
+      ctx.fillText(`${r.pts}`, cols[2].x + cols[2].w / 2, y + 23);
+
+      ctx.font = "13px Segoe UI, sans-serif";
+      ctx.fillText(`${r.mw.toFixed(1)}`, cols[3].x + cols[3].w / 2, y + 23);
+      ctx.fillText(`${r.omw.toFixed(1)}`, cols[4].x + cols[4].w / 2, y + 23);
+      ctx.fillText(`${r.oomw.toFixed(1)}`, cols[5].x + cols[5].w / 2, y + 23);
+
+      const deck = players.find(p => p.id === r.player_id)?.deck || "";
+      ctx.font = "12px Segoe UI, sans-serif";
+      ctx.fillStyle = deck ? "#e8eaf6" : "#546e7a";
+      ctx.fillText(deck || "-", cols[6].x + cols[6].w / 2, y + 23);
+
+      ctx.font = "11px Segoe UI, monospace";
+      ctx.fillStyle = "#90caf9";
+      ctx.fillText(r.kts, cols[7].x + cols[7].w / 2, y + 23);
+
+      ctx.globalAlpha = 1.0;
+      y += rowH;
+    }
+
+    // Footer
+    ctx.fillStyle = "#546e7a";
+    ctx.font = "11px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("YGO Swiss Tournament \u2022 KTS Scoring", W / 2, y + 24);
+
+    // Download
+    const link = document.createElement("a");
+    link.download = `${(info.name || "tournament").replace(/\s+/g, "_")}_standings.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+
   const editResultSave = async () => {
     if (!tid || !editMatchId) return;
     try {
@@ -730,6 +868,9 @@ function AdminDashboard() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={copyShareLink} className="secondary">
               🔗 Share Link
+            </button>
+            <button onClick={exportStandingsImage} disabled={!standings.length} className="secondary">
+              📸 Export Standings
             </button>
             <button onClick={forgetTournament} className="secondary">
               ⚙️ Close Tournament
