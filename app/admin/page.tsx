@@ -39,6 +39,10 @@ type MetagameEntry = {
   wins: number;
   losses: number;
   win_rate: number;
+  topped: number;
+  conversion: number;
+  avg_placement: number;
+  tier: string;
 };
 
 type PlayerStats = {
@@ -207,6 +211,7 @@ function AdminDashboard() {
   // Metagame
   const [metagame, setMetagame] = useState<MetagameEntry[]>([]);
   const [showMetagame, setShowMetagame] = useState(false);
+  const [archImages, setArchImages] = useState<Record<string, string | null>>({});
 
   // Player stats modal (cross-tournament)
   const [playerStats, setPlayerStats] = useState<PlayerStats | null>(null);
@@ -510,7 +515,18 @@ function AdminDashboard() {
     setShowMetagame(true);
     try {
       const res = await fetchJSON(`/api/tournaments/${tid}/metagame`);
-      setMetagame(res.metagame || []);
+      const entries = res.metagame || [];
+      setMetagame(entries);
+      // Batch fetch archetype images
+      const names = entries.map((m: MetagameEntry) => m.archetype).filter((a: string) => a !== "Unknown");
+      if (names.length > 0) {
+        fetchJSON("/api/archetype-images", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ archetypes: names }),
+        }).then(d => setArchImages(prev => ({ ...prev, ...(d.images || {}) })))
+          .catch(() => {});
+      }
     } catch (e) {
       console.error(e);
       setMetagame([]);
@@ -1447,7 +1463,7 @@ function AdminDashboard() {
 
       {showMetagame && (
         <div className="modal-overlay">
-          <div className="modal-content">
+          <div className="modal-content" style={{ maxWidth: 800 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h2>📊 Archetype Breakdown</h2>
               <button onClick={() => setShowMetagame(false)} className="secondary">✕ Close</button>
@@ -1478,37 +1494,59 @@ function AdminDashboard() {
                   </svg>
                 </div>
                 {/* Legend + stats table */}
-                <table>
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th>Archetype</th>
-                      <th style={{ width: 60 }}>Count</th>
-                      <th style={{ width: 70 }}>Share</th>
-                      <th style={{ width: 80 }}>Record</th>
-                      <th style={{ width: 80 }}>Win Rate</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {metagame.map((m, i) => {
-                      const COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
-                      return (
-                        <tr key={m.archetype}>
-                          <td style={{ textAlign: 'center' }}>
-                            <div style={{ width: 14, height: 14, borderRadius: 3, background: COLORS[i % COLORS.length], display: 'inline-block' }} />
-                          </td>
-                          <td style={{ fontWeight: 'bold' }}>{m.archetype}</td>
-                          <td style={{ textAlign: 'center' }}>{m.count}</td>
-                          <td style={{ textAlign: 'center' }}>{m.share}%</td>
-                          <td style={{ textAlign: 'center' }}>{m.wins}W-{m.losses}L</td>
-                          <td style={{ textAlign: 'center', fontWeight: 'bold', color: m.win_rate >= 50 ? '#81c784' : '#ef5350' }}>
-                            {m.win_rate}%
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div style={{ overflowX: 'auto' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Archetype</th>
+                        <th style={{ width: 50 }}>Tier</th>
+                        <th style={{ width: 50 }}>Count</th>
+                        <th style={{ width: 60 }}>Share</th>
+                        <th style={{ width: 70 }}>Record</th>
+                        <th style={{ width: 60 }}>Win%</th>
+                        <th style={{ width: 80 }}>Top Cut</th>
+                        <th style={{ width: 70 }}>Conv%</th>
+                        <th style={{ width: 60 }}>Avg #</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {metagame.map((m, i) => {
+                        const COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
+                        const tierColor = m.tier === 'Tier 1' ? '#81c784' : m.tier === 'Tier 2' ? '#ffb74d' : '#90caf9';
+                        const imgUrl = archImages[m.archetype];
+                        return (
+                          <tr key={m.archetype}>
+                            <td style={{ textAlign: 'center', width: 40 }}>
+                              {imgUrl ? (
+                                <img src={imgUrl} alt={m.archetype} style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover', border: `2px solid ${COLORS[i % COLORS.length]}` }} />
+                              ) : (
+                                <div style={{ width: 14, height: 14, borderRadius: 3, background: COLORS[i % COLORS.length], display: 'inline-block' }} />
+                              )}
+                            </td>
+                            <td style={{ fontWeight: 'bold' }}>{m.archetype}</td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span style={{ fontSize: 10, fontWeight: 'bold', color: tierColor, background: `${tierColor}22`, padding: '2px 6px', borderRadius: 4, border: `1px solid ${tierColor}44` }}>
+                                {m.tier}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>{m.count}</td>
+                            <td style={{ textAlign: 'center' }}>{m.share}%</td>
+                            <td style={{ textAlign: 'center' }}>{m.wins}W-{m.losses}L</td>
+                            <td style={{ textAlign: 'center', fontWeight: 'bold', color: m.win_rate >= 50 ? '#81c784' : '#ef5350' }}>
+                              {m.win_rate}%
+                            </td>
+                            <td style={{ textAlign: 'center' }}>{m.topped}/{m.count}</td>
+                            <td style={{ textAlign: 'center', fontWeight: 'bold', color: m.conversion >= 30 ? '#81c784' : m.conversion >= 15 ? '#ffb74d' : '#ef5350' }}>
+                              {m.conversion}%
+                            </td>
+                            <td style={{ textAlign: 'center', color: '#90caf9' }}>{m.avg_placement}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </>
             )}
           </div>
