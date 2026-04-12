@@ -25,6 +25,10 @@ type MetagameEntry = {
   wins: number;
   losses: number;
   win_rate: number;
+  topped: number;
+  conversion: number;
+  avg_placement: number;
+  tier: string;
 };
 
 const fetchJSON = async (url: string) => {
@@ -43,6 +47,7 @@ export default function PlayersPage() {
   const [history, setHistory] = useState<TournamentHistoryEntry[]>([]);
   const [players, setPlayers] = useState<PlayerStat[]>([]);
   const [metagame, setMetagame] = useState<MetagameEntry[]>([]);
+  const [archImages, setArchImages] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -56,7 +61,17 @@ export default function PlayersPage() {
         ]);
         setHistory(h.tournaments || []);
         setPlayers(p.players || []);
-        setMetagame(m.metagame || []);
+        const entries = m.metagame || [];
+        setMetagame(entries);
+        // Batch fetch archetype images
+        const names = entries.map((e: MetagameEntry) => e.archetype).filter((a: string) => a !== "Unknown");
+        if (names.length > 0) {
+          fetch("/api/archetype-images", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ archetypes: names.slice(0, 30) }),
+          }).then(r => r.json()).then(d => setArchImages(d.images || {})).catch(() => {});
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -99,7 +114,7 @@ export default function PlayersPage() {
         <>
           {tab === "history" && <HistoryTab history={history} />}
           {tab === "leaderboard" && <LeaderboardTab players={players} />}
-          {tab === "metagame" && <MetagameTab metagame={metagame} />}
+          {tab === "metagame" && <MetagameTab metagame={metagame} archImages={archImages} />}
         </>
       )}
     </main>
@@ -188,7 +203,7 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
   );
 }
 
-function MetagameTab({ metagame }: { metagame: MetagameEntry[] }) {
+function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; archImages: Record<string, string | null> }) {
   if (metagame.length === 0) {
     return (
       <div className="card">
@@ -226,29 +241,51 @@ function MetagameTab({ metagame }: { metagame: MetagameEntry[] }) {
         <table>
           <thead>
             <tr>
-              <th style={{ width: 30 }}></th>
+              <th style={{ width: 40 }}></th>
               <th>Archetype</th>
-              <th style={{ width: 60 }}>Count</th>
-              <th style={{ width: 70 }}>Share</th>
-              <th style={{ width: 80 }}>Record</th>
-              <th style={{ width: 80 }}>Win%</th>
+              <th style={{ width: 50 }}>Tier</th>
+              <th style={{ width: 50 }}>Count</th>
+              <th style={{ width: 60 }}>Share</th>
+              <th style={{ width: 70 }}>Record</th>
+              <th style={{ width: 60 }}>Win%</th>
+              <th style={{ width: 80 }}>Top Cut</th>
+              <th style={{ width: 70 }}>Conv%</th>
+              <th style={{ width: 60 }}>Avg #</th>
             </tr>
           </thead>
           <tbody>
-            {metagame.map((m, i) => (
-              <tr key={m.archetype}>
-                <td style={{ textAlign: "center" }}>
-                  <div style={{ width: 14, height: 14, borderRadius: 3, background: PIE_COLORS[i % PIE_COLORS.length], display: "inline-block" }} />
-                </td>
-                <td style={{ fontWeight: "bold" }}>{m.archetype}</td>
-                <td style={{ textAlign: "center" }}>{m.count}</td>
-                <td style={{ textAlign: "center" }}>{m.share}%</td>
-                <td style={{ textAlign: "center" }}>{m.wins}W-{m.losses}L</td>
-                <td style={{ textAlign: "center", fontWeight: "bold", color: m.win_rate >= 50 ? "#81c784" : "#ef5350" }}>
-                  {m.win_rate}%
-                </td>
-              </tr>
-            ))}
+            {metagame.map((m, i) => {
+              const tierColor = m.tier === "Tier 1" ? "#81c784" : m.tier === "Tier 2" ? "#ffb74d" : "#90caf9";
+              const imgUrl = archImages[m.archetype];
+              return (
+                <tr key={m.archetype}>
+                  <td style={{ textAlign: "center" }}>
+                    {imgUrl ? (
+                      <img src={imgUrl} alt={m.archetype} style={{ width: 32, height: 32, borderRadius: 4, objectFit: "cover", border: `2px solid ${PIE_COLORS[i % PIE_COLORS.length]}` }} />
+                    ) : (
+                      <div style={{ width: 14, height: 14, borderRadius: 3, background: PIE_COLORS[i % PIE_COLORS.length], display: "inline-block" }} />
+                    )}
+                  </td>
+                  <td style={{ fontWeight: "bold" }}>{m.archetype}</td>
+                  <td style={{ textAlign: "center" }}>
+                    <span style={{ fontSize: 10, fontWeight: "bold", color: tierColor, background: `${tierColor}22`, padding: "2px 6px", borderRadius: 4, border: `1px solid ${tierColor}44` }}>
+                      {m.tier}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: "center" }}>{m.count}</td>
+                  <td style={{ textAlign: "center" }}>{m.share}%</td>
+                  <td style={{ textAlign: "center" }}>{m.wins}W-{m.losses}L</td>
+                  <td style={{ textAlign: "center", fontWeight: "bold", color: m.win_rate >= 50 ? "#81c784" : "#ef5350" }}>
+                    {m.win_rate}%
+                  </td>
+                  <td style={{ textAlign: "center" }}>{m.topped}/{m.count}</td>
+                  <td style={{ textAlign: "center", fontWeight: "bold", color: m.conversion >= 30 ? "#81c784" : m.conversion >= 15 ? "#ffb74d" : "#ef5350" }}>
+                    {m.conversion}%
+                  </td>
+                  <td style={{ textAlign: "center", color: "#90caf9" }}>{m.avg_placement}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

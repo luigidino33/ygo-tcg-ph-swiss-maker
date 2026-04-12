@@ -103,6 +103,31 @@ def _detect_archetypes(deck_name: str) -> List[str]:
   # But avoid duplicates
   return sorted(set(found), key=lambda a: a.lower())
 
+# ── Archetype image cache ───────────────────────────────────────────────────
+_arch_image_cache: Dict[str, Optional[str]] = {}
+
+def _fetch_archetype_image(archetype: str) -> Optional[str]:
+  if archetype in _arch_image_cache:
+    return _arch_image_cache[archetype]
+  import requests
+  try:
+    r = requests.get(
+      "https://db.ygoprodeck.com/api/v7/cardinfo.php",
+      params={"archetype": archetype, "num": 1, "offset": 0},
+      timeout=10
+    )
+    if r.status_code == 200:
+      data = r.json()
+      cards = data.get("data", [])
+      if cards and cards[0].get("card_images"):
+        url = cards[0]["card_images"][0].get("image_url_cropped")
+        _arch_image_cache[archetype] = url
+        return url
+  except Exception:
+    pass
+  _arch_image_cache[archetype] = None
+  return None
+
 def tid_key(tid: str) -> str:
   return f"t_{tid}"
 
@@ -949,6 +974,30 @@ def api_detect_archetypes():
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+@app.get("/api/archetype-image")
+def api_archetype_image():
+  try:
+    name = (request.args.get("name") or "").strip()
+    if not name:
+      return jsonify({"error": "name required"}), 400
+    url = _fetch_archetype_image(name)
+    return jsonify({"image_url": url})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/archetype-images")
+def api_archetype_images_batch():
+  """Batch fetch archetype images to avoid N+1 requests."""
+  try:
+    body = request.get_json(force=True) or {}
+    names = body.get("archetypes", [])
+    result = {}
+    for name in names[:30]:  # limit to 30 per request
+      result[name] = _fetch_archetype_image(name)
+    return jsonify({"images": result})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 # ── Deck archetype tagging ───────────────────────────────────────────────────
 
 @app.post("/api/tournaments/<tid>/set-deck")
@@ -986,6 +1035,14 @@ def api_set_deck(tid):
 
 # ── Metagame breakdown ───────────────────────────────────────────────────────
 
+def _compute_tier(share: float, conversion: float) -> str:
+  """Assign tier based on representation share and top-cut conversion rate."""
+  if share >= 10 and conversion >= 30:
+    return "Tier 1"
+  if share >= 5 or conversion >= 20:
+    return "Tier 2"
+  return "Rogue"
+
 @app.get("/api/tournaments/<tid>/metagame")
 def api_metagame(tid):
   try:
@@ -994,39 +1051,56 @@ def api_metagame(tid):
       return jsonify({"error": "not found"}), 404
 
     nodes = rebuild_graph(t)
+    standings = compute_standings(t)
+    total_players = len(t["players"])
+    # Top cut = top 25% or top 4, whichever is larger
+    top_cut = max(4, total_players // 4)
+    rank_map = {r["player_id"]: r["rank"] for r in standings}
+
     arch_stats: Dict[str, dict] = {}
     total_entries = 0
 
     for p in t["players"]:
       archetypes = p.get("archetypes") or []
       deck = p.get("deck") or ""
-      # Fallback: if no archetypes list, use full deck name
       if not archetypes:
         archetypes = [deck] if deck else ["Unknown"]
       node = nodes.get(p["id"])
       pw = node.wins_excl_bye() if node else 0
       pl = len(node.losses) if node else 0
+      rank = rank_map.get(p["id"], total_players)
+      topped = rank <= top_cut
       for arch in archetypes:
         if arch not in arch_stats:
-          arch_stats[arch] = {"count": 0, "wins": 0, "losses": 0}
+          arch_stats[arch] = {"count": 0, "wins": 0, "losses": 0, "topped": 0, "ranks": []}
         arch_stats[arch]["count"] += 1
         arch_stats[arch]["wins"] += pw
         arch_stats[arch]["losses"] += pl
+        arch_stats[arch]["ranks"].append(rank)
+        if topped:
+          arch_stats[arch]["topped"] += 1
         total_entries += 1
 
     result = []
     for arch, stats in sorted(arch_stats.items(), key=lambda x: -x[1]["count"]):
       total_matches = stats["wins"] + stats["losses"]
+      share = round(stats["count"] / total_entries * 100, 1) if total_entries else 0
+      conversion = round(stats["topped"] / stats["count"] * 100, 1) if stats["count"] else 0
+      avg_place = round(sum(stats["ranks"]) / len(stats["ranks"]), 1) if stats["ranks"] else 0
       result.append({
         "archetype": arch,
         "count": stats["count"],
-        "share": round(stats["count"] / total_entries * 100, 1) if total_entries else 0,
+        "share": share,
         "wins": stats["wins"],
         "losses": stats["losses"],
         "win_rate": round(stats["wins"] / total_matches * 100, 1) if total_matches else 0,
+        "topped": stats["topped"],
+        "conversion": conversion,
+        "avg_placement": avg_place,
+        "tier": _compute_tier(share, conversion),
       })
 
-    return jsonify({"metagame": result, "total_players": len(t["players"])})
+    return jsonify({"metagame": result, "total_players": total_players, "top_cut": top_cut})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
@@ -1190,6 +1264,11 @@ def api_global_metagame():
       if not t:
         continue
       nodes = rebuild_graph(t)
+      standings = compute_standings(t)
+      tp = len(t.get("players", []))
+      top_cut = max(4, tp // 4)
+      rank_map = {r["player_id"]: r["rank"] for r in standings}
+
       for p in t.get("players", []):
         archetypes = p.get("archetypes") or []
         deck = p.get("deck") or ""
@@ -1200,24 +1279,36 @@ def api_global_metagame():
         node = nodes.get(p["id"])
         pw = node.wins_excl_bye() if node else 0
         pl = len(node.losses) if node else 0
+        rank = rank_map.get(p["id"], tp)
+        topped = rank <= top_cut
         for arch in archetypes:
           if arch not in arch_stats:
-            arch_stats[arch] = {"count": 0, "wins": 0, "losses": 0}
+            arch_stats[arch] = {"count": 0, "wins": 0, "losses": 0, "topped": 0, "ranks": []}
           arch_stats[arch]["count"] += 1
           arch_stats[arch]["wins"] += pw
           arch_stats[arch]["losses"] += pl
+          arch_stats[arch]["ranks"].append(rank)
+          if topped:
+            arch_stats[arch]["topped"] += 1
           total_entries += 1
 
     result = []
     for arch, stats in sorted(arch_stats.items(), key=lambda x: -x[1]["count"]):
       total_matches = stats["wins"] + stats["losses"]
+      share = round(stats["count"] / total_entries * 100, 1) if total_entries else 0
+      conversion = round(stats["topped"] / stats["count"] * 100, 1) if stats["count"] else 0
+      avg_place = round(sum(stats["ranks"]) / len(stats["ranks"]), 1) if stats["ranks"] else 0
       result.append({
         "archetype": arch,
         "count": stats["count"],
-        "share": round(stats["count"] / total_entries * 100, 1) if total_entries else 0,
+        "share": share,
         "wins": stats["wins"],
         "losses": stats["losses"],
         "win_rate": round(stats["wins"] / total_matches * 100, 1) if total_matches else 0,
+        "topped": stats["topped"],
+        "conversion": conversion,
+        "avg_placement": avg_place,
+        "tier": _compute_tier(share, conversion),
       })
 
     return jsonify({"metagame": result, "total_entries": total_entries})
