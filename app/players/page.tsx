@@ -19,7 +19,7 @@ type PlayerStat = {
 };
 
 type MetagameEntry = {
-  deck: string;
+  archetype: string;
   count: number;
   share: number;
   wins: number;
@@ -198,7 +198,7 @@ function MetagameTab({ metagame }: { metagame: MetagameEntry[] }) {
   }
   return (
     <div className="card">
-      <h2>Global Metagame</h2>
+      <h2>Top Archetypes</h2>
 
       {/* Pie chart */}
       <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}>
@@ -227,7 +227,7 @@ function MetagameTab({ metagame }: { metagame: MetagameEntry[] }) {
           <thead>
             <tr>
               <th style={{ width: 30 }}></th>
-              <th>Deck</th>
+              <th>Archetype</th>
               <th style={{ width: 60 }}>Count</th>
               <th style={{ width: 70 }}>Share</th>
               <th style={{ width: 80 }}>Record</th>
@@ -236,11 +236,11 @@ function MetagameTab({ metagame }: { metagame: MetagameEntry[] }) {
           </thead>
           <tbody>
             {metagame.map((m, i) => (
-              <tr key={m.deck}>
+              <tr key={m.archetype}>
                 <td style={{ textAlign: "center" }}>
                   <div style={{ width: 14, height: 14, borderRadius: 3, background: PIE_COLORS[i % PIE_COLORS.length], display: "inline-block" }} />
                 </td>
-                <td style={{ fontWeight: "bold" }}>{m.deck}</td>
+                <td style={{ fontWeight: "bold" }}>{m.archetype}</td>
                 <td style={{ textAlign: "center" }}>{m.count}</td>
                 <td style={{ textAlign: "center" }}>{m.share}%</td>
                 <td style={{ textAlign: "center" }}>{m.wins}W-{m.losses}L</td>

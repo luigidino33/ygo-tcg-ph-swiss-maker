@@ -66,6 +66,43 @@ def kv_keys(pattern: str) -> list[str]:
 
 TOURNAMENT_INDEX_KEY = "tournament_index"
 
+# ── Archetype cache (fetched from ygoprodeck, cached in-memory per cold start) ─
+_archetype_cache: Optional[List[str]] = None
+_archetype_cache_ts: float = 0
+
+def _fetch_archetypes() -> List[str]:
+  global _archetype_cache, _archetype_cache_ts
+  if _archetype_cache and (time.time() - _archetype_cache_ts < 86400):
+    return _archetype_cache
+  import requests
+  try:
+    r = requests.get("https://db.ygoprodeck.com/api/v7/archetypes.php", timeout=10)
+    r.raise_for_status()
+    data = r.json()
+    _archetype_cache = [e["archetype_name"] for e in data]
+    _archetype_cache_ts = time.time()
+  except Exception:
+    if _archetype_cache:
+      return _archetype_cache
+    _archetype_cache = []
+    _archetype_cache_ts = time.time()
+  return _archetype_cache
+
+def _detect_archetypes(deck_name: str) -> List[str]:
+  """Match a deck name against known archetypes (case-insensitive substring)."""
+  if not deck_name:
+    return []
+  archetypes = _fetch_archetypes()
+  name_lower = deck_name.lower()
+  found = []
+  for arch in archetypes:
+    if arch.lower() in name_lower:
+      found.append(arch)
+  # Remove sub-archetypes that are substrings of longer matched archetypes
+  # e.g. if both "A.I." and "A.I. Contact" match, keep both (they're distinct)
+  # But avoid duplicates
+  return sorted(set(found), key=lambda a: a.lower())
+
 def tid_key(tid: str) -> str:
   return f"t_{tid}"
 
@@ -890,6 +927,28 @@ def api_delete_tournament(tid):
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+# ── Archetype list endpoint ──────────────────────────────────────────────────
+
+@app.get("/api/archetypes")
+def api_archetypes():
+  try:
+    q = (request.args.get("q") or "").strip().lower()
+    archetypes = _fetch_archetypes()
+    if q:
+      archetypes = [a for a in archetypes if q in a.lower()]
+    return jsonify({"archetypes": archetypes[:50]})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.get("/api/detect-archetypes")
+def api_detect_archetypes():
+  try:
+    deck = (request.args.get("deck") or "").strip()
+    detected = _detect_archetypes(deck)
+    return jsonify({"archetypes": detected})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 # ── Deck archetype tagging ───────────────────────────────────────────────────
 
 @app.post("/api/tournaments/<tid>/set-deck")
@@ -898,6 +957,7 @@ def api_set_deck(tid):
     body = request.get_json(force=True) or {}
     pid = body.get("player_id")
     deck = (body.get("deck") or "").strip()
+    archetypes = body.get("archetypes")  # optional override
     if not pid:
       return jsonify({"error": "player_id required"}), 400
 
@@ -905,17 +965,22 @@ def api_set_deck(tid):
     if not t:
       return jsonify({"error": "not found"}), 404
 
+    # Auto-detect archetypes if not explicitly provided
+    if archetypes is None:
+      archetypes = _detect_archetypes(deck) if deck else []
+
     found = False
     for p in t["players"]:
       if p["id"] == pid:
         p["deck"] = deck
+        p["archetypes"] = archetypes
         found = True
         break
     if not found:
       return jsonify({"error": "Unknown player_id"}), 400
 
     kv_set_json(tid_key(tid), t)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "archetypes": archetypes})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
@@ -929,32 +994,39 @@ def api_metagame(tid):
       return jsonify({"error": "not found"}), 404
 
     nodes = rebuild_graph(t)
-    deck_stats: Dict[str, dict] = {}
+    arch_stats: Dict[str, dict] = {}
+    total_entries = 0
 
     for p in t["players"]:
-      deck = p.get("deck") or "Unknown"
-      if deck not in deck_stats:
-        deck_stats[deck] = {"count": 0, "wins": 0, "losses": 0}
-      deck_stats[deck]["count"] += 1
+      archetypes = p.get("archetypes") or []
+      deck = p.get("deck") or ""
+      # Fallback: if no archetypes list, use full deck name
+      if not archetypes:
+        archetypes = [deck] if deck else ["Unknown"]
       node = nodes.get(p["id"])
-      if node:
-        deck_stats[deck]["wins"] += node.wins_excl_bye()
-        deck_stats[deck]["losses"] += len(node.losses)
+      pw = node.wins_excl_bye() if node else 0
+      pl = len(node.losses) if node else 0
+      for arch in archetypes:
+        if arch not in arch_stats:
+          arch_stats[arch] = {"count": 0, "wins": 0, "losses": 0}
+        arch_stats[arch]["count"] += 1
+        arch_stats[arch]["wins"] += pw
+        arch_stats[arch]["losses"] += pl
+        total_entries += 1
 
     result = []
-    total_players = len(t["players"])
-    for deck, stats in sorted(deck_stats.items(), key=lambda x: -x[1]["count"]):
+    for arch, stats in sorted(arch_stats.items(), key=lambda x: -x[1]["count"]):
       total_matches = stats["wins"] + stats["losses"]
       result.append({
-        "deck": deck,
+        "archetype": arch,
         "count": stats["count"],
-        "share": round(stats["count"] / total_players * 100, 1) if total_players else 0,
+        "share": round(stats["count"] / total_entries * 100, 1) if total_entries else 0,
         "wins": stats["wins"],
         "losses": stats["losses"],
         "win_rate": round(stats["wins"] / total_matches * 100, 1) if total_matches else 0,
       })
 
-    return jsonify({"metagame": result, "total_players": total_players})
+    return jsonify({"metagame": result, "total_players": len(t["players"])})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
@@ -1110,8 +1182,8 @@ def api_all_player_stats():
 def api_global_metagame():
   try:
     idx = _rebuild_tournament_index()
-    deck_stats: Dict[str, dict] = {}
-    total_tagged = 0
+    arch_stats: Dict[str, dict] = {}
+    total_entries = 0
 
     for entry in idx:
       t = kv_get_json(tid_key(entry["id"]))
@@ -1119,30 +1191,35 @@ def api_global_metagame():
         continue
       nodes = rebuild_graph(t)
       for p in t.get("players", []):
+        archetypes = p.get("archetypes") or []
         deck = p.get("deck") or ""
-        if not deck:
+        if not archetypes and not deck:
           continue
-        total_tagged += 1
-        if deck not in deck_stats:
-          deck_stats[deck] = {"count": 0, "wins": 0, "losses": 0}
-        deck_stats[deck]["count"] += 1
+        if not archetypes:
+          archetypes = [deck]
         node = nodes.get(p["id"])
-        if node:
-          deck_stats[deck]["wins"] += node.wins_excl_bye()
-          deck_stats[deck]["losses"] += len(node.losses)
+        pw = node.wins_excl_bye() if node else 0
+        pl = len(node.losses) if node else 0
+        for arch in archetypes:
+          if arch not in arch_stats:
+            arch_stats[arch] = {"count": 0, "wins": 0, "losses": 0}
+          arch_stats[arch]["count"] += 1
+          arch_stats[arch]["wins"] += pw
+          arch_stats[arch]["losses"] += pl
+          total_entries += 1
 
     result = []
-    for deck, stats in sorted(deck_stats.items(), key=lambda x: -x[1]["count"]):
+    for arch, stats in sorted(arch_stats.items(), key=lambda x: -x[1]["count"]):
       total_matches = stats["wins"] + stats["losses"]
       result.append({
-        "deck": deck,
+        "archetype": arch,
         "count": stats["count"],
-        "share": round(stats["count"] / total_tagged * 100, 1) if total_tagged else 0,
+        "share": round(stats["count"] / total_entries * 100, 1) if total_entries else 0,
         "wins": stats["wins"],
         "losses": stats["losses"],
         "win_rate": round(stats["wins"] / total_matches * 100, 1) if total_matches else 0,
       })
 
-    return jsonify({"metagame": result, "total_tagged": total_tagged})
+    return jsonify({"metagame": result, "total_entries": total_entries})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
