@@ -23,7 +23,7 @@ type MatchHistoryEntry = {
   match_id: string;
 };
 
-type Player = { id: string; name: string; deck?: string };
+type Player = { id: string; name: string; deck?: string; archetypes?: string[] };
 
 type TournamentHistoryEntry = {
   id: string;
@@ -33,7 +33,7 @@ type TournamentHistoryEntry = {
 };
 
 type MetagameEntry = {
-  deck: string;
+  archetype: string;
   count: number;
   share: number;
   wins: number;
@@ -215,6 +215,10 @@ function AdminDashboard() {
   // Deck editing
   const [editingDeckId, setEditingDeckId] = useState<string | null>(null);
   const [deckInput, setDeckInput] = useState("");
+  // Archetype add for a specific player
+  const [addingArchId, setAddingArchId] = useState<string | null>(null);
+  const [archSearchInput, setArchSearchInput] = useState("");
+  const [archSuggestions, setArchSuggestions] = useState<string[]>([]);
 
   // Auto-suggest round count based on player count
   useEffect(() => {
@@ -466,21 +470,39 @@ function AdminDashboard() {
     }
   };
 
-  const saveDeck = async (playerId: string, deck: string) => {
+  const saveDeck = async (playerId: string, deck: string, archetypes?: string[]) => {
     if (!tid) return;
     try {
-      await fetchJSON(`/api/tournaments/${tid}/set-deck`, {
+      const body: any = { player_id: playerId, deck };
+      if (archetypes !== undefined) body.archetypes = archetypes;
+      const res = await fetchJSON(`/api/tournaments/${tid}/set-deck`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player_id: playerId, deck }),
+        body: JSON.stringify(body),
       });
+      const detectedArchs = res.archetypes || [];
       setPlayers((prev) =>
-        prev.map((p) => (p.id === playerId ? { ...p, deck } : p))
+        prev.map((p) => (p.id === playerId ? { ...p, deck, archetypes: detectedArchs } : p))
       );
       setEditingDeckId(null);
     } catch (e) {
       alert(`Failed to save deck: ${errMsg(e)}`);
     }
+  };
+
+  const removeArchetype = async (playerId: string, archToRemove: string) => {
+    const player = players.find(p => p.id === playerId);
+    if (!player) return;
+    const updated = (player.archetypes || []).filter(a => a !== archToRemove);
+    await saveDeck(playerId, player.deck || "", updated);
+  };
+
+  const addArchetype = async (playerId: string, arch: string) => {
+    const player = players.find(p => p.id === playerId);
+    if (!player) return;
+    const current = player.archetypes || [];
+    if (current.includes(arch)) return;
+    await saveDeck(playerId, player.deck || "", [...current, arch]);
   };
 
   const loadMetagame = async () => {
@@ -1159,9 +1181,10 @@ function AdminDashboard() {
                     <td style={{ textAlign: 'center' }}>{r.oomw.toFixed(1)}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.ddd}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.kts}</td>
-                    <td style={{ textAlign: 'center' }}>
+                    <td style={{ textAlign: 'left', minWidth: 160 }}>
+                      {/* Deck name */}
                       {editingDeckId === r.player_id ? (
-                        <div style={{ display: 'flex', gap: 4 }}>
+                        <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
                           <input
                             value={deckInput}
                             onChange={(e) => setDeckInput(e.target.value)}
@@ -1170,7 +1193,7 @@ function AdminDashboard() {
                               if (e.key === "Escape") setEditingDeckId(null);
                             }}
                             placeholder="Deck name"
-                            style={{ fontSize: 11, padding: 4, marginBottom: 0, width: 100 }}
+                            style={{ fontSize: 11, padding: 4, marginBottom: 0, width: 120 }}
                             autoFocus
                           />
                           <button
@@ -1187,12 +1210,93 @@ function AdminDashboard() {
                             setDeckInput(p?.deck || "");
                             setEditingDeckId(r.player_id);
                           }}
-                          style={{ cursor: 'pointer', fontSize: 12, color: players.find(p => p.id === r.player_id)?.deck ? '#e8eaf6' : '#64b5f6', fontStyle: players.find(p => p.id === r.player_id)?.deck ? 'normal' : 'italic' }}
+                          style={{ cursor: 'pointer', fontSize: 12, color: players.find(p => p.id === r.player_id)?.deck ? '#e8eaf6' : '#64b5f6', fontStyle: players.find(p => p.id === r.player_id)?.deck ? 'normal' : 'italic', display: 'block', marginBottom: 2 }}
                           title="Click to edit deck"
                         >
                           {players.find((p) => p.id === r.player_id)?.deck || "Set deck"}
                         </span>
                       )}
+                      {/* Archetype tags */}
+                      {(() => {
+                        const pl = players.find(p => p.id === r.player_id);
+                        const archs = pl?.archetypes || [];
+                        return (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
+                            {archs.map(a => (
+                              <span key={a} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'rgba(100,181,246,0.2)', border: '1px solid #5c6bc0', borderRadius: 4, padding: '1px 6px', fontSize: 10, color: '#90caf9' }}>
+                                {a}
+                                <span
+                                  onClick={() => removeArchetype(r.player_id, a)}
+                                  style={{ cursor: 'pointer', color: '#ef5350', fontWeight: 'bold', marginLeft: 2 }}
+                                  title="Remove archetype"
+                                >x</span>
+                              </span>
+                            ))}
+                            {pl?.deck && (
+                              addingArchId === r.player_id ? (
+                                <div style={{ display: 'inline-flex', gap: 2, position: 'relative' }}>
+                                  <input
+                                    value={archSearchInput}
+                                    onChange={(e) => {
+                                      setArchSearchInput(e.target.value);
+                                      const q = e.target.value.trim();
+                                      if (q.length >= 2) {
+                                        fetchJSON(`/api/archetypes?q=${encodeURIComponent(q)}`)
+                                          .then(d => setArchSuggestions(d.archetypes || []))
+                                          .catch(() => setArchSuggestions([]));
+                                      } else {
+                                        setArchSuggestions([]);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" && archSearchInput.trim()) {
+                                        addArchetype(r.player_id, archSearchInput.trim());
+                                        setAddingArchId(null);
+                                        setArchSearchInput("");
+                                        setArchSuggestions([]);
+                                      }
+                                      if (e.key === "Escape") {
+                                        setAddingArchId(null);
+                                        setArchSearchInput("");
+                                        setArchSuggestions([]);
+                                      }
+                                    }}
+                                    placeholder="Search archetype"
+                                    style={{ fontSize: 10, padding: '2px 4px', width: 100, marginBottom: 0 }}
+                                    autoFocus
+                                  />
+                                  {archSuggestions.length > 0 && (
+                                    <div style={{ position: 'absolute', top: '100%', left: 0, background: '#1a237e', border: '1px solid #5c6bc0', borderRadius: 4, zIndex: 50, maxHeight: 120, overflowY: 'auto', width: 160 }}>
+                                      {archSuggestions.map(s => (
+                                        <div
+                                          key={s}
+                                          onClick={() => {
+                                            addArchetype(r.player_id, s);
+                                            setAddingArchId(null);
+                                            setArchSearchInput("");
+                                            setArchSuggestions([]);
+                                          }}
+                                          style={{ padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderBottom: '1px solid rgba(92,107,192,0.3)' }}
+                                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(100,181,246,0.2)')}
+                                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                                        >
+                                          {s}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <span
+                                  onClick={() => { setAddingArchId(r.player_id); setArchSearchInput(""); setArchSuggestions([]); }}
+                                  style={{ cursor: 'pointer', fontSize: 10, color: '#64b5f6', border: '1px dashed #5c6bc0', borderRadius: 4, padding: '1px 5px' }}
+                                  title="Add archetype tag"
+                                >+</span>
+                              )
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       {r.dropped ? (
@@ -1345,7 +1449,7 @@ function AdminDashboard() {
         <div className="modal-overlay">
           <div className="modal-content">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h2>📊 Metagame Breakdown</h2>
+              <h2>📊 Archetype Breakdown</h2>
               <button onClick={() => setShowMetagame(false)} className="secondary">✕ Close</button>
             </div>
             {metagame.length === 0 ? (
@@ -1378,7 +1482,7 @@ function AdminDashboard() {
                   <thead>
                     <tr>
                       <th></th>
-                      <th>Deck</th>
+                      <th>Archetype</th>
                       <th style={{ width: 60 }}>Count</th>
                       <th style={{ width: 70 }}>Share</th>
                       <th style={{ width: 80 }}>Record</th>
@@ -1389,11 +1493,11 @@ function AdminDashboard() {
                     {metagame.map((m, i) => {
                       const COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
                       return (
-                        <tr key={m.deck}>
+                        <tr key={m.archetype}>
                           <td style={{ textAlign: 'center' }}>
                             <div style={{ width: 14, height: 14, borderRadius: 3, background: COLORS[i % COLORS.length], display: 'inline-block' }} />
                           </td>
-                          <td style={{ fontWeight: 'bold' }}>{m.deck}</td>
+                          <td style={{ fontWeight: 'bold' }}>{m.archetype}</td>
                           <td style={{ textAlign: 'center' }}>{m.count}</td>
                           <td style={{ textAlign: 'center' }}>{m.share}%</td>
                           <td style={{ textAlign: 'center' }}>{m.wins}W-{m.losses}L</td>
