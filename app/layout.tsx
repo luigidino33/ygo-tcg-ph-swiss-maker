@@ -1,4 +1,4 @@
-export const metadata = { title: "YGO PH Swiss Tournament Pairings" };
+export const metadata = { title: "YGO TCG PH Tournament App" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -403,27 +403,73 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           /* Responsive */
           @media (max-width: 768px) {
             body {
-              padding: 12px;
+              padding: 8px;
             }
-            
+
             .card {
+              padding: 14px;
+              margin-bottom: 16px;
+            }
+
+            h1 { font-size: 20px; letter-spacing: 1px; }
+            h2 { font-size: 17px; letter-spacing: 1px; }
+
+            button {
+              padding: 10px 12px;
+              font-size: 11px;
+              letter-spacing: 0.5px;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+
+            table {
+              font-size: 11px;
+            }
+
+            th, td {
+              padding: 6px 4px;
+            }
+
+            th {
+              font-size: 10px;
+              letter-spacing: 0.5px;
+            }
+
+            .modal-content {
               padding: 16px;
             }
-            
-            h1 { font-size: 24px; }
-            h2 { font-size: 20px; }
-            
+
+            .modal-overlay {
+              padding: 12px;
+            }
+          }
+
+          @media (max-width: 480px) {
+            h1 { font-size: 16px; letter-spacing: 0.5px; }
+            h2 { font-size: 14px; }
+
             button {
-              padding: 10px 16px;
-              font-size: 12px;
+              padding: 8px 10px;
+              font-size: 10px;
+              letter-spacing: 0;
             }
-            
+
             table {
-              font-size: 12px;
+              font-size: 10px;
             }
-            
+
             th, td {
-              padding: 8px;
+              padding: 5px 3px;
+            }
+
+            th {
+              font-size: 9px;
+            }
+
+            .card {
+              padding: 12px;
+              margin-bottom: 12px;
             }
           }
         `}} />

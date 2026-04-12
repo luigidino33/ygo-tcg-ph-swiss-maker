@@ -696,7 +696,7 @@ function AdminDashboard() {
     ctx.fillStyle = "#546e7a";
     ctx.font = "11px Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("YGO Swiss Tournament \u2022 KTS Scoring", W / 2, y + 24);
+    ctx.fillText("YGO TCG PH Tournament App \u2022 KTS Scoring", W / 2, y + 24);
 
     // Download
     const link = document.createElement("a");
@@ -776,7 +776,7 @@ function AdminDashboard() {
     return (
       <div style={{ maxWidth: 600, margin: "0 auto", paddingTop: 48 }}>
         <div className="card">
-          <h1>⚔️ YGO Swiss Tournament</h1>
+          <h1>⚔️ YGO TCG PH Tournament App</h1>
           <div>
             <label>Tournament Name</label>
             <input

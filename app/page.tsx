@@ -4,7 +4,7 @@ export default function HomePage() {
   return (
     <div style={{ maxWidth: 500, margin: "0 auto", paddingTop: 80 }}>
       <div className="card" style={{ textAlign: "center" }}>
-        <h1>YGO Swiss Tournament</h1>
+        <h1>YGO TCG PH Tournament App</h1>
         <p style={{ color: "#cbd5e1", fontSize: 14, marginBottom: 32 }}>
           KTS-powered Swiss pairings with double loss support
         </p>
