@@ -198,7 +198,7 @@ export default function PlayersPage() {
     <main style={{ maxWidth: 1000, margin: "0 auto" }}>
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-          <h1>YGO Swiss Tournament</h1>
+          <h1>YGO TCG PH Tournament App</h1>
           <a href="/" style={{ textDecoration: "none" }}>
             <button className="secondary" style={{ fontSize: 12 }}>Home</button>
           </a>

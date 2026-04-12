@@ -1,4 +1,4 @@
-export const metadata = { title: "YGO PH Swiss Tournament Pairings" };
+export const metadata = { title: "YGO TCG PH Tournament App" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
