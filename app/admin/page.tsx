@@ -19,6 +19,7 @@ type StandRow = {
 type MatchHistoryEntry = {
   round: number;
   opponent: string;
+  opponent_deck: string;
   result: string;
   match_id: string;
 };
@@ -1370,6 +1371,7 @@ function AdminDashboard() {
                   <tr>
                     <th style={{ width: 80 }}>Round</th>
                     <th>Opponent</th>
+                    <th>Deck</th>
                     <th style={{ width: 120 }}>Result</th>
                   </tr>
                 </thead>
@@ -1378,6 +1380,9 @@ function AdminDashboard() {
                     <tr key={h.match_id}>
                       <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{h.round}</td>
                       <td>{h.opponent}</td>
+                      <td style={{ fontSize: 12, color: h.opponent_deck ? '#e8eaf6' : '#546e7a', fontStyle: h.opponent_deck ? 'normal' : 'italic' }}>
+                        {h.opponent_deck || '—'}
+                      </td>
                       <td style={{
                         textAlign: 'center',
                         fontWeight: 'bold',
