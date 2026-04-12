@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type TournamentHistoryEntry = {
   id: string;
@@ -41,6 +41,12 @@ const fetchJSON = async (url: string) => {
 };
 
 const PIE_COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
+
+// Sort arrow indicator
+function SortArrow({ column, sortKey, sortDir }: { column: string; sortKey: string; sortDir: "asc" | "desc" }) {
+  if (column !== sortKey) return <span style={{ color: "#546e7a", marginLeft: 2 }}>↕</span>;
+  return <span style={{ color: "#64b5f6", marginLeft: 2 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
+}
 
 export default function PlayersPage() {
   const [tab, setTab] = useState<"history" | "leaderboard" | "metagame">("history");
@@ -159,10 +165,42 @@ function HistoryTab({ history }: { history: TournamentHistoryEntry[] }) {
   );
 }
 
+type LeaderSortKey = "wins" | "losses" | "win_rate" | "tournaments" | "avg_omw" | "name";
+
 function LeaderboardTab({ players }: { players: PlayerStat[] }) {
+  const [sortKey, setSortKey] = useState<LeaderSortKey>("wins");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const toggleSort = (key: LeaderSortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  };
+
+  const sorted = useMemo(() => {
+    const copy = [...players];
+    copy.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "name") cmp = a.name.localeCompare(b.name);
+      else cmp = (a[sortKey] as number) - (b[sortKey] as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [players, sortKey, sortDir]);
+
   if (players.length === 0) {
     return <div className="card"><p style={{ color: "#94a3b8" }}>No player data yet.</p></div>;
   }
+
+  const thStyle = (key: LeaderSortKey, w: number): React.CSSProperties => ({
+    width: w,
+    cursor: "pointer",
+    userSelect: "none",
+  });
+
   return (
     <div className="card">
       <h2>All-Time Leaderboard</h2>
@@ -171,16 +209,28 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
           <thead>
             <tr>
               <th style={{ width: 50 }}>#</th>
-              <th>Player</th>
-              <th style={{ width: 60 }}>T</th>
-              <th style={{ width: 60 }}>W</th>
-              <th style={{ width: 60 }}>L</th>
-              <th style={{ width: 80 }}>Win%</th>
-              <th style={{ width: 80 }}>OMW%</th>
+              <th style={thStyle("name", 0)} onClick={() => toggleSort("name")}>
+                Player <SortArrow column="name" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("tournaments", 60)} onClick={() => toggleSort("tournaments")}>
+                T <SortArrow column="tournaments" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("wins", 60)} onClick={() => toggleSort("wins")}>
+                W <SortArrow column="wins" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("losses", 60)} onClick={() => toggleSort("losses")}>
+                L <SortArrow column="losses" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("win_rate", 80)} onClick={() => toggleSort("win_rate")}>
+                Win% <SortArrow column="win_rate" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("avg_omw", 80)} onClick={() => toggleSort("avg_omw")}>
+                OMW% <SortArrow column="avg_omw" sortKey={sortKey} sortDir={sortDir} />
+              </th>
             </tr>
           </thead>
           <tbody>
-            {players.map((p, i) => (
+            {sorted.map((p, i) => (
               <tr key={p.name} className={i < 3 ? `rank-${i + 1}` : ""}>
                 <td style={{ textAlign: "center", fontWeight: "bold", fontSize: 16 }}>
                   {i === 0 && "\u{1F947} "}
@@ -203,7 +253,41 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
   );
 }
 
+type MetaSortKey = "tier" | "archetype" | "count" | "share" | "win_rate" | "conversion" | "avg_placement";
+
+const TIER_ORDER: Record<string, number> = { "Tier 1": 0, "Tier 2": 1, "Rogue": 2 };
+
 function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; archImages: Record<string, string | null> }) {
+  const [sortKey, setSortKey] = useState<MetaSortKey>("tier");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const toggleSort = (key: MetaSortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      // Default direction: asc for tier/archetype/avg_placement, desc for everything else
+      setSortDir(key === "tier" || key === "archetype" || key === "avg_placement" ? "asc" : "desc");
+    }
+  };
+
+  const sorted = useMemo(() => {
+    const copy = [...metagame];
+    copy.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "tier") {
+        cmp = (TIER_ORDER[a.tier] ?? 9) - (TIER_ORDER[b.tier] ?? 9);
+        if (cmp === 0) cmp = b.conversion - a.conversion; // secondary: conversion desc
+      } else if (sortKey === "archetype") {
+        cmp = a.archetype.localeCompare(b.archetype);
+      } else {
+        cmp = (a[sortKey] as number) - (b[sortKey] as number);
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [metagame, sortKey, sortDir]);
+
   if (metagame.length === 0) {
     return (
       <div className="card">
@@ -211,6 +295,13 @@ function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; arch
       </div>
     );
   }
+
+  const thStyle = (key: MetaSortKey, w: number): React.CSSProperties => ({
+    width: w,
+    cursor: "pointer",
+    userSelect: "none",
+  });
+
   return (
     <div className="card">
       <h2>Top Archetypes</h2>
@@ -242,19 +333,33 @@ function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; arch
           <thead>
             <tr>
               <th style={{ width: 40 }}></th>
-              <th>Archetype</th>
-              <th style={{ width: 50 }}>Tier</th>
-              <th style={{ width: 50 }}>Count</th>
-              <th style={{ width: 60 }}>Share</th>
+              <th style={thStyle("archetype", 0)} onClick={() => toggleSort("archetype")}>
+                Archetype <SortArrow column="archetype" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("tier", 50)} onClick={() => toggleSort("tier")}>
+                Tier <SortArrow column="tier" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("count", 50)} onClick={() => toggleSort("count")}>
+                Count <SortArrow column="count" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("share", 60)} onClick={() => toggleSort("share")}>
+                Share <SortArrow column="share" sortKey={sortKey} sortDir={sortDir} />
+              </th>
               <th style={{ width: 70 }}>Record</th>
-              <th style={{ width: 60 }}>Win%</th>
+              <th style={thStyle("win_rate", 60)} onClick={() => toggleSort("win_rate")}>
+                Win% <SortArrow column="win_rate" sortKey={sortKey} sortDir={sortDir} />
+              </th>
               <th style={{ width: 80 }}>Top Cut</th>
-              <th style={{ width: 70 }}>Conv%</th>
-              <th style={{ width: 60 }}>Avg #</th>
+              <th style={thStyle("conversion", 70)} onClick={() => toggleSort("conversion")}>
+                Conv% <SortArrow column="conversion" sortKey={sortKey} sortDir={sortDir} />
+              </th>
+              <th style={thStyle("avg_placement", 60)} onClick={() => toggleSort("avg_placement")}>
+                Avg # <SortArrow column="avg_placement" sortKey={sortKey} sortDir={sortDir} />
+              </th>
             </tr>
           </thead>
           <tbody>
-            {metagame.map((m, i) => {
+            {sorted.map((m, i) => {
               const tierColor = m.tier === "Tier 1" ? "#81c784" : m.tier === "Tier 2" ? "#ffb74d" : "#90caf9";
               const imgUrl = archImages[m.archetype];
               return (

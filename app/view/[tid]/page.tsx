@@ -17,6 +17,13 @@ type StandRow = {
   dropped: boolean;
 };
 
+type MatchHistoryEntry = {
+  round: number;
+  opponent: string;
+  result: string;
+  match_id: string;
+};
+
 const fetchJSON = async (url: string) => {
   const res = await fetch(url, { cache: "no-store" });
   const text = await res.text();
@@ -34,6 +41,11 @@ export default function ViewPage() {
   const [standings, setStandings] = useState<StandRow[]>([]);
   const [pairs, setPairs] = useState<Pair[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Match history modal
+  const [historyPlayer, setHistoryPlayer] = useState<{ name: string; id: string } | null>(null);
+  const [historyData, setHistoryData] = useState<MatchHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   useEffect(() => {
     if (!tid) return;
@@ -57,6 +69,21 @@ export default function ViewPage() {
     return () => clearInterval(id);
   }, [tid]);
 
+  const loadHistory = async (playerId: string, playerName: string) => {
+    setHistoryPlayer({ name: playerName, id: playerId });
+    setHistoryLoading(true);
+    setHistoryData([]);
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/player-history/${playerId}`);
+      setHistoryData(res.history || []);
+    } catch (e) {
+      console.error(e);
+      setHistoryData([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   if (error) {
     return (
       <div style={{ maxWidth: 600, margin: "0 auto", paddingTop: 48 }}>
@@ -78,7 +105,7 @@ export default function ViewPage() {
           </p>
         )}
         <p style={{ color: "#90caf9", fontSize: 12, marginTop: 4 }}>
-          Live view &mdash; auto-refreshes every 8 seconds
+          Live view &mdash; auto-refreshes every 8 seconds &bull; Click a player name to see match history
         </p>
       </div>
 
@@ -167,8 +194,14 @@ export default function ViewPage() {
                       {r.rank === 3 && "\u{1F949} "}
                       {r.rank}
                     </td>
-                    <td style={{ fontWeight: "bold" }}>
-                      {r.player}
+                    <td>
+                      <span
+                        onClick={() => loadHistory(r.player_id, r.player)}
+                        style={{ fontWeight: "bold", cursor: "pointer", borderBottom: "1px dashed #5c6bc0" }}
+                        title="View match history"
+                      >
+                        {r.player}
+                      </span>
                       {r.dropped && (
                         <span style={{ color: "#ef5350", fontSize: 11, marginLeft: 8 }}>
                           DROPPED
@@ -184,6 +217,52 @@ export default function ViewPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Match History Modal */}
+      {historyPlayer && (
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setHistoryPlayer(null); }}>
+          <div className="modal-content">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2>📋 {historyPlayer.name}&apos;s Match History</h2>
+              <button onClick={() => setHistoryPlayer(null)} className="secondary">✕ Close</button>
+            </div>
+            {historyLoading ? (
+              <p>Loading...</p>
+            ) : historyData.length === 0 ? (
+              <p style={{ color: "#94a3b8" }}>No match history found.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: 70 }}>Round</th>
+                    <th>Opponent</th>
+                    <th style={{ width: 120 }}>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyData.map((h) => {
+                    const color =
+                      h.result === "Win" || h.result === "BYE (Win)"
+                        ? "#81c784"
+                        : h.result === "Loss"
+                        ? "#ef5350"
+                        : h.result === "Double Loss"
+                        ? "#ff9800"
+                        : "#94a3b8";
+                    return (
+                      <tr key={h.match_id}>
+                        <td style={{ textAlign: "center", fontWeight: "bold" }}>R{h.round}</td>
+                        <td style={{ fontWeight: "bold" }}>{h.opponent}</td>
+                        <td style={{ textAlign: "center", fontWeight: "bold", color }}>{h.result}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}
