@@ -241,6 +241,7 @@ def compute_standings(t: dict):
 
 def player_match_history(t: dict, player_id: str) -> list[dict]:
   id2name = {p["id"]: p["name"] for p in t["players"]}
+  id2deck = {p["id"]: p.get("deck", "") for p in t["players"]}
   history = []
   for rnd in t.get("rounds", []):
     for m in rnd["matches"]:
@@ -263,6 +264,7 @@ def player_match_history(t: dict, player_id: str) -> list[dict]:
       history.append({
         "round": rnd["n"],
         "opponent": id2name.get(opponent_id, "BYE") if opponent_id else "BYE",
+        "opponent_deck": id2deck.get(opponent_id, "") if opponent_id else "",
         "result": result,
         "match_id": m["id"]
       })
