@@ -1477,27 +1477,77 @@ function AdminDashboard() {
               <p style={{ color: '#94a3b8' }}>No deck data yet. Tag player decks in the standings table first.</p>
             ) : (
               <>
-                {/* Pie chart */}
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24 }}>
-                  <svg viewBox="-1.1 -1.1 2.2 2.2" width={220} height={220}>
-                    {(() => {
-                      const COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
-                      const total = metagame.reduce((s, m) => s + m.count, 0);
-                      let cumAngle = -Math.PI / 2;
-                      return metagame.map((m, i) => {
-                        const angle = (m.count / total) * 2 * Math.PI;
-                        const x1 = Math.cos(cumAngle);
-                        const y1 = Math.sin(cumAngle);
-                        cumAngle += angle;
-                        const x2 = Math.cos(cumAngle);
-                        const y2 = Math.sin(cumAngle);
-                        const largeArc = angle > Math.PI ? 1 : 0;
-                        const d = `M0,0 L${x1},${y1} A1,1 0 ${largeArc},1 ${x2},${y2} Z`;
-                        return <path key={i} d={d} fill={COLORS[i % COLORS.length]} stroke="#0c1445" strokeWidth={0.02} />;
-                      });
-                    })()}
-                  </svg>
-                </div>
+                {/* Pie chart with archetype images */}
+                {(() => {
+                  const PIE_COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
+                  const total = metagame.reduce((s, m) => s + m.count, 0);
+                  type PieSlice = { label: string; count: number; color: string; imageUrl?: string | null };
+                  const major: PieSlice[] = [];
+                  let othersCount = 0;
+                  metagame.forEach((m, i) => {
+                    const share = total > 0 ? (m.count / total) * 100 : 0;
+                    if (share >= 5) {
+                      major.push({ label: m.archetype, count: m.count, color: PIE_COLORS[i % PIE_COLORS.length], imageUrl: archImages[m.archetype] });
+                    } else {
+                      othersCount += m.count;
+                    }
+                  });
+                  if (othersCount > 0) {
+                    major.push({ label: "Others", count: othersCount, color: "#546e7a", imageUrl: null });
+                  }
+                  const size = 320;
+                  const cx = size / 2; const cy = size / 2;
+                  const outerR = 110; const innerR = 60; const imgR = outerR + 40;
+                  let cumAngle = -Math.PI / 2;
+                  const slices = major.map((s) => {
+                    const angle = (s.count / total) * 2 * Math.PI;
+                    const startAngle = cumAngle;
+                    cumAngle += angle;
+                    const endAngle = cumAngle;
+                    const midAngle = (startAngle + endAngle) / 2;
+                    const x1o = cx + outerR * Math.cos(startAngle); const y1o = cy + outerR * Math.sin(startAngle);
+                    const x2o = cx + outerR * Math.cos(endAngle); const y2o = cy + outerR * Math.sin(endAngle);
+                    const x1i = cx + innerR * Math.cos(endAngle); const y1i = cy + innerR * Math.sin(endAngle);
+                    const x2i = cx + innerR * Math.cos(startAngle); const y2i = cy + innerR * Math.sin(startAngle);
+                    const largeArc = angle > Math.PI ? 1 : 0;
+                    const d = `M${x1o},${y1o} A${outerR},${outerR} 0 ${largeArc},1 ${x2o},${y2o} L${x1i},${y1i} A${innerR},${innerR} 0 ${largeArc},0 ${x2i},${y2i} Z`;
+                    const imgX = cx + imgR * Math.cos(midAngle); const imgY = cy + imgR * Math.sin(midAngle);
+                    const lineX1 = cx + (outerR + 5) * Math.cos(midAngle); const lineY1 = cy + (outerR + 5) * Math.sin(midAngle);
+                    const lineX2 = cx + (imgR - 18) * Math.cos(midAngle); const lineY2 = cy + (imgR - 18) * Math.sin(midAngle);
+                    return { ...s, d, midAngle, imgX, imgY, lineX1, lineY1, lineX2, lineY2, angle };
+                  });
+                  return (
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24 }}>
+                      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                        {slices.map((s, i) => (
+                          <path key={i} d={s.d} fill={s.color} stroke="#0c1445" strokeWidth={1.5} />
+                        ))}
+                        {slices.map((s, i) => {
+                          if (s.label === "Others" || s.angle < 0.15) return null;
+                          return (
+                            <g key={`img-${i}`}>
+                              <line x1={s.lineX1} y1={s.lineY1} x2={s.lineX2} y2={s.lineY2} stroke={s.color} strokeWidth={1.5} opacity={0.7} />
+                              {s.imageUrl ? (
+                                <>
+                                  <clipPath id={`clip-adm-${i}`}><circle cx={s.imgX} cy={s.imgY} r={16} /></clipPath>
+                                  <circle cx={s.imgX} cy={s.imgY} r={17} fill={s.color} />
+                                  <image href={s.imageUrl} x={s.imgX - 16} y={s.imgY - 16} width={32} height={32} clipPath={`url(#clip-adm-${i})`} preserveAspectRatio="xMidYMid slice" />
+                                </>
+                              ) : (
+                                <>
+                                  <circle cx={s.imgX} cy={s.imgY} r={14} fill={s.color} opacity={0.3} />
+                                  <text x={s.imgX} y={s.imgY + 4} textAnchor="middle" fontSize={8} fill="#e8eaf6" fontWeight="bold">{s.label.slice(0, 3)}</text>
+                                </>
+                              )}
+                            </g>
+                          );
+                        })}
+                        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#90caf9" fontWeight="bold">{total}</text>
+                        <text x={cx} y={cy + 10} textAnchor="middle" fontSize={9} fill="#546e7a">entries</text>
+                      </svg>
+                    </div>
+                  );
+                })()}
                 {/* Legend + stats table */}
                 <div style={{ overflowX: 'auto' }}>
                   <table>
