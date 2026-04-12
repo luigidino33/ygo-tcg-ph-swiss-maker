@@ -212,7 +212,7 @@ export default function PlayersPage() {
             key={t}
             onClick={() => setTab(t)}
             className={tab === t ? "" : "secondary"}
-            style={{ flex: 1, minWidth: 120 }}
+            style={{ flex: 1, minWidth: 0 }}
           >
             {t === "history" && "📜 Tournaments"}
             {t === "leaderboard" && "🏆 Leaderboard"}
