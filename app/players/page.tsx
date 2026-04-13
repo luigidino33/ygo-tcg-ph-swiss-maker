@@ -158,7 +158,7 @@ function SortArrow({ column, sortKey, sortDir }: { column: string; sortKey: stri
 
 export default function PlayersPage() {
   const [tab, setTab] = useState<"history" | "leaderboard" | "metagame">("history");
-  const [formatFilter, setFormatFilter] = useState<"all" | "standard" | "retro">("all");
+  const [formatFilter, setFormatFilter] = useState<"standard" | "retro">("standard");
   const [history, setHistory] = useState<TournamentHistoryEntry[]>([]);
   const [players, setPlayers] = useState<PlayerStat[]>([]);
   const [metagame, setMetagame] = useState<MetagameEntry[]>([]);
@@ -169,7 +169,7 @@ export default function PlayersPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const fmtParam = formatFilter !== "all" ? `?format=${formatFilter}` : "";
+        const fmtParam = `?format=${formatFilter}`;
         const [h, p, m] = await Promise.all([
           fetchJSON(`/api/tournament-history${fmtParam}`),
           fetchJSON(`/api/all-player-stats${fmtParam}`),
@@ -227,14 +227,14 @@ export default function PlayersPage() {
       {/* Format filter */}
       <div className="card" style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ color: "#90caf9", fontSize: 12, fontWeight: "bold", marginRight: 4 }}>FORMAT:</span>
-        {(["all", "standard", "retro"] as const).map((f) => (
+        {(["standard", "retro"] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFormatFilter(f)}
             className={formatFilter === f ? "" : "secondary"}
             style={{ fontSize: 11, padding: "6px 12px" }}
           >
-            {f === "all" ? "All" : f === "standard" ? "⚔️ Standard" : "🕹️ Retro"}
+            {f === "standard" ? "⚔️ Standard" : "🕹️ Retro"}
           </button>
         ))}
       </div>
@@ -244,7 +244,7 @@ export default function PlayersPage() {
       ) : (
         <>
           {tab === "history" && <HistoryTab history={history} />}
-          {tab === "leaderboard" && <LeaderboardTab players={players} />}
+          {tab === "leaderboard" && <LeaderboardTab players={players} format={formatFilter} />}
           {tab === "metagame" && <MetagameTab metagame={metagame} archImages={archImages} />}
         </>
       )}
@@ -296,7 +296,8 @@ function HistoryTab({ history }: { history: TournamentHistoryEntry[] }) {
 
 type LeaderSortKey = "wins" | "losses" | "draws" | "win_rate" | "tournaments" | "avg_omw" | "name";
 
-function LeaderboardTab({ players }: { players: PlayerStat[] }) {
+function LeaderboardTab({ players, format }: { players: PlayerStat[]; format: "standard" | "retro" }) {
+  const showDraws = format === "retro";
   const [sortKey, setSortKey] = useState<LeaderSortKey>("wins");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -350,9 +351,11 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
               <th style={thStyle("losses", 60)} onClick={() => toggleSort("losses")}>
                 L <SortArrow column="losses" sortKey={sortKey} sortDir={sortDir} />
               </th>
-              <th style={thStyle("draws", 60)} onClick={() => toggleSort("draws")}>
-                D <SortArrow column="draws" sortKey={sortKey} sortDir={sortDir} />
-              </th>
+              {showDraws && (
+                <th style={thStyle("draws", 60)} onClick={() => toggleSort("draws")}>
+                  D <SortArrow column="draws" sortKey={sortKey} sortDir={sortDir} />
+                </th>
+              )}
               <th style={thStyle("win_rate", 80)} onClick={() => toggleSort("win_rate")}>
                 Win% <SortArrow column="win_rate" sortKey={sortKey} sortDir={sortDir} />
               </th>
@@ -374,7 +377,7 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
                 <td style={{ textAlign: "center" }}>{p.tournaments}</td>
                 <td style={{ textAlign: "center", color: "#81c784" }}>{p.wins}</td>
                 <td style={{ textAlign: "center", color: "#ef5350" }}>{p.losses}</td>
-                <td style={{ textAlign: "center", color: "#ff9800" }}>{p.draws}</td>
+                {showDraws && <td style={{ textAlign: "center", color: "#ff9800" }}>{p.draws}</td>}
                 <td style={{ textAlign: "center", fontWeight: "bold" }}>{p.win_rate}%</td>
                 <td style={{ textAlign: "center" }}>{p.avg_omw}%</td>
               </tr>
