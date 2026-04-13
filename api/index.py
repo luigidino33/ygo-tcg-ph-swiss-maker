@@ -155,6 +155,8 @@ class Node:
   losses: List[object] = field(default_factory=list)  # Node
   draws: List[object] = field(default_factory=list)   # Node (retro format)
   lost_rounds: List[int] = field(default_factory=list)
+  game_wins: int = 0    # total individual games won (retro)
+  game_losses: int = 0  # total individual games lost (retro)
 
   def num_byes(self) -> int:
     return sum(1 for w in self.wins if w == "BYE")
@@ -173,6 +175,10 @@ class Node:
     denom = self.matches_played_excl_bye()
     return (self.wins_excl_bye() / denom) if denom else 0.0
 
+  def game_win_pct(self) -> float:
+    total = self.game_wins + self.game_losses
+    return (self.game_wins / total) if total else 0.0
+
 def rebuild_graph(t: dict) -> Dict[str, Node]:
   is_retro = t.get("format") == "retro"
   players = {p["id"]: Node(id=p["id"], name=p["name"]) for p in t["players"]}
@@ -186,9 +192,13 @@ def rebuild_graph(t: dict) -> Dict[str, Node]:
         continue
       if r == "BYE":
         a.wins.append("BYE")
+        if is_retro:
+          a.game_wins += 2  # BYE counts as 2-0 for game win %
         continue
       if not b:
         continue
+      # Parse game score if present (retro format): [gw_a, gw_b]
+      score = m.get("score")  # e.g. [2, 0], [2, 1], [1, 1]
       if r == "A":
         a.wins.append(b); b.losses.append(a); b.lost_rounds.append(n)
       elif r == "B":
@@ -201,6 +211,10 @@ def rebuild_graph(t: dict) -> Dict[str, Node]:
           # Standard: TIE = Double Loss (0pt each)
           a.losses.append(b); b.losses.append(a)
           a.lost_rounds.append(n); b.lost_rounds.append(n)
+      # Accumulate game wins/losses for retro tiebreaking
+      if is_retro and score and len(score) == 2:
+        a.game_wins += score[0]; a.game_losses += score[1]
+        b.game_wins += score[1]; b.game_losses += score[0]
   return players
 
 def opp_win_pct(p: Node) -> float:
@@ -213,6 +227,7 @@ def opp_win_pct(p: Node) -> float:
   return tot / num if num else 0.0
 
 def compute_standings(t: dict):
+  is_retro = t.get("format") == "retro"
   nodes = rebuild_graph(t)
   dropped = set(t.get("dropped", []))
   deck_map = {pl["id"]: pl.get("deck", "") for pl in t.get("players", [])}
@@ -226,21 +241,34 @@ def compute_standings(t: dict):
         continue
       acc += opp_win_pct(opp); nopp += 1
     ccc = max(0, int(round((acc / nopp) if nopp else 0.0, 3) * 1000))
-    ddd = sum(r * r for r in p.lost_rounds)
-    kts = f"{str(aa).zfill(2)}{str(bbb).zfill(4)}{str(ccc).zfill(4)}{str(ddd).zfill(4)}"
+    ddd_raw = sum(r * r for r in p.lost_rounds)
+    # For retro format, DDD slot stores game win % (higher is better)
+    # For standard format, DDD stores sum of squared lost rounds (lower is better, so we invert)
+    if is_retro:
+      gwp = int(round(p.game_win_pct(), 3) * 1000)
+      ddd = max(0, gwp)
+      kts = f"{str(aa).zfill(2)}{str(bbb).zfill(4)}{str(ccc).zfill(4)}{str(ddd).zfill(4)}"
+    else:
+      ddd = ddd_raw
+      kts = f"{str(aa).zfill(2)}{str(bbb).zfill(4)}{str(ccc).zfill(4)}{str(ddd).zfill(4)}"
 
     d = p.matches_played_excl_bye()
     mw = (p.wins_excl_bye() / d * 100.0) if d else 0.0
     omw = opp_win_pct(p) * 100.0
     oomw = (acc / nopp * 100.0) if nopp else 0.0
 
-    rows.append({
+    row = {
       "player_id": p.id, "player": p.name, "pts": aa,
       "mw": round(mw, 1), "omw": round(omw, 1), "oomw": round(oomw, 1),
       "ddd": str(ddd).zfill(4), "kts": kts,
       "dropped": p.id in dropped,
       "deck": deck_map.get(p.id, ""),
-    })
+    }
+    if is_retro:
+      row["gw"] = round(p.game_win_pct() * 100, 1)
+      row["game_wins"] = p.game_wins
+      row["game_losses"] = p.game_losses
+    rows.append(row)
   rows.sort(key=lambda r: -int(r["kts"]))
   for i, r in enumerate(rows, start=1):
     r["rank"] = i
@@ -269,11 +297,20 @@ def player_match_history(t: dict, player_id: str) -> list[dict]:
       else:
         result = r
       opponent_id = m.get("b") if m["a"] == player_id else m["a"]
+      # Format game score string if available
+      score = m.get("score")
+      score_str = ""
+      if score and len(score) == 2:
+        if m["a"] == player_id:
+          score_str = f"{score[0]}-{score[1]}"
+        else:
+          score_str = f"{score[1]}-{score[0]}"
       history.append({
         "round": rnd["n"],
         "opponent": id2name.get(opponent_id, "BYE") if opponent_id else "BYE",
         "opponent_deck": id2deck.get(opponent_id, "") if opponent_id else "",
         "result": result,
+        "score": score_str,
         "match_id": m["id"]
       })
   return history
@@ -621,13 +658,19 @@ def api_edit_result(tid):
     if not found:
       return jsonify({"ok": False, "message": "Match not found."}), 404
 
+    score = body.get("score")  # optional [gw_a, gw_b] for retro
     if res == "BYE":
       found["b"] = None
       found["r"] = "BYE"
+      found.pop("score", None)
     else:
       if found.get("b") in (None, "BYE"):
         return jsonify({"ok": False, "message": "Cannot set result on BYE match without an opponent."}), 400
       found["r"] = res
+      if score and isinstance(score, list) and len(score) == 2:
+        found["score"] = score
+      elif "score" in found and res == "PENDING":
+        found.pop("score", None)
 
     kv_set_json(tid_key(tid), t)
 
@@ -714,6 +757,10 @@ def api_finalize_round(tid):
       mid = r.get("match_id"); out = r.get("outcome")
       if mid in by_id and out in ("A", "B", "TIE"):
         by_id[mid]["r"] = out
+        # Store game score for retro format (e.g. [2,0], [2,1], [1,1])
+        score = r.get("score")
+        if score and isinstance(score, list) and len(score) == 2:
+          by_id[mid]["score"] = score
 
     kv_set_json(tid_key(tid), t)
     return jsonify({"ok": True, "standings": compute_standings(t)})
@@ -900,6 +947,7 @@ def api_undo_finalize(tid):
     for m in last["matches"]:
       if m.get("r") not in ("BYE",):
         m["r"] = "PENDING"
+        m.pop("score", None)
 
     kv_set_json(tid_key(tid), t)
     return jsonify({"ok": True, "round": last["n"], "pairs": pairs_for_ui(t), "standings": compute_standings(t)})

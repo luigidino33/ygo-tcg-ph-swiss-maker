@@ -22,6 +22,7 @@ type MatchHistoryEntry = {
   opponent: string;
   opponent_deck: string;
   result: string;
+  score?: string;
   match_id: string;
 };
 
@@ -242,6 +243,7 @@ export default function ViewPage() {
                     <th>Opponent</th>
                     <th>Deck</th>
                     <th style={{ width: 120 }}>Result</th>
+                    {info?.format === "retro" && <th style={{ width: 60 }}>Score</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -262,6 +264,11 @@ export default function ViewPage() {
                           {h.opponent_deck || "—"}
                         </td>
                         <td style={{ textAlign: "center", fontWeight: "bold", color }}>{h.result}</td>
+                        {info?.format === "retro" && (
+                          <td style={{ textAlign: "center", fontWeight: "bold", color: "#b39ddb" }}>
+                            {h.score || "—"}
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
