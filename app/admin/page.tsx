@@ -204,7 +204,8 @@ function AdminDashboard() {
   const [playersText, setPlayersText] = useState("");
   const [name, setName] = useState("BDC Weekly");
   const [rounds, setRounds] = useState(4);
-  const [results, setResults] = useState<Record<string, "A" | "B" | "TIE">>({});
+  const [format, setFormat] = useState<"standard" | "retro">("standard");
+  const [results, setResults] = useState<Record<string, { outcome: "A" | "B" | "TIE"; score?: [number, number] }>>({});
 
   // Tournament history
   const [history, setHistory] = useState<TournamentHistoryEntry[]>([]);
@@ -288,7 +289,7 @@ function AdminDashboard() {
       const data = await fetchJSON(`/api/tournaments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, total_rounds: rounds, players: playersList }),
+        body: JSON.stringify({ name, total_rounds: rounds, players: playersList, format }),
       });
       localStorage.setItem("tid", data.tournament_id);
       setTid(data.tournament_id);
@@ -377,9 +378,11 @@ function AdminDashboard() {
       results: pairs
         .filter((p) => p.b !== "BYE")
         .map((p) => {
-          const outcome = results[p.match_id];
-          if (!outcome) throw new Error(`Missing result for table ${p.table}`);
-          return { match_id: p.match_id, outcome };
+          const r = results[p.match_id];
+          if (!r) throw new Error(`Missing result for table ${p.table}`);
+          const entry: any = { match_id: p.match_id, outcome: r.outcome };
+          if (r.score) entry.score = r.score;
+          return entry;
         }),
     };
     setFinalizing(true);
@@ -708,10 +711,21 @@ function AdminDashboard() {
   const editResultSave = async () => {
     if (!tid || !editMatchId) return;
     try {
+      // Parse "A:2-0" format for retro, or plain "A"/"B"/"TIE" for standard
+      let result = editResult;
+      let score: number[] | undefined;
+      if (editResult.includes(":")) {
+        const [r, s] = editResult.split(":");
+        result = r;
+        const [a, b] = s.split("-").map(Number);
+        score = [a, b];
+      }
+      const payload: any = { match_id: editMatchId, result };
+      if (score) payload.score = score;
       const res = await fetchJSON(`/api/tournaments/${tid}/edit-result`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ match_id: editMatchId, result: editResult }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(res.message || "Edit failed");
       const i = await fetchJSON(`/api/tournaments/${tid}`);
@@ -815,6 +829,28 @@ function AdminDashboard() {
             })()}
           </div>
           <div>
+            <label>Format</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setFormat("standard")}
+                className={format === "standard" ? "" : "secondary"}
+                style={{ flex: 1, fontSize: 13 }}
+              >
+                Standard
+              </button>
+              <button
+                onClick={() => setFormat("retro")}
+                className={format === "retro" ? "" : "secondary"}
+                style={{ flex: 1, fontSize: 13 }}
+              >
+                Retro
+              </button>
+            </div>
+            <p style={{ color: '#90caf9', fontSize: 11, marginTop: 4 }}>
+              {format === "retro" ? "Retro: Ties = Draw (1pt each)" : "Standard: Ties = Double Loss (0pt each)"}
+            </p>
+          </div>
+          <div>
             <label>Players (one per line)</label>
             <textarea
               value={playersText}
@@ -896,7 +932,7 @@ function AdminDashboard() {
             {info && (
               <>
                 <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
-                  Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists
+                  Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists • {(info as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
                 </p>
                 <p style={{ color: '#90caf9', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
                   Tournament ID: {info.id}
@@ -965,9 +1001,21 @@ function AdminDashboard() {
                   onChange={(e) => setEditResult(e.target.value)}
                 >
                   <option value="PENDING">Pending</option>
-                  <option value="A">Player A Won</option>
-                  <option value="B">Player B Won</option>
-                  <option value="TIE">Double Loss</option>
+                  {(info as any)?.format === "retro" ? (
+                    <>
+                      <option value="A:2-0">A Won 2-0</option>
+                      <option value="A:2-1">A Won 2-1</option>
+                      <option value="TIE:1-1">Draw 1-1</option>
+                      <option value="B:1-2">B Won 2-1</option>
+                      <option value="B:0-2">B Won 2-0</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="A">Player A Won</option>
+                      <option value="B">Player B Won</option>
+                      <option value="TIE">Double Loss</option>
+                    </>
+                  )}
                 </select>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -991,18 +1039,20 @@ function AdminDashboard() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {pairs.map((p) => {
                 const isBye = p.b === "BYE";
-                const currentResult = results[p.match_id];
+                const cr = results[p.match_id];
+                const currentResult = cr?.outcome;
                 const isCompleted = !!currentResult || isBye;
-                
+                const scoreLabel = cr?.score ? `${cr.score[0]}-${cr.score[1]}` : "";
+
                 return (
-                  <div 
+                  <div
                     key={`summary-${p.match_id}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: 12,
                       padding: '12px',
-                      background: isCompleted 
+                      background: isCompleted
                         ? 'linear-gradient(135deg, rgba(56, 142, 60, 0.15), rgba(76, 175, 80, 0.08))'
                         : 'rgba(26, 35, 126, 0.4)',
                       border: `2px solid ${isCompleted ? '#81c784' : '#5c6bc0'}`,
@@ -1025,11 +1075,11 @@ function AdminDashboard() {
                     }}>
                       #{p.table}
                     </div>
-                    
+
                     {/* Match Info */}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ 
-                        fontSize: 14, 
+                      <div style={{
+                        fontSize: 14,
                         fontWeight: 'bold',
                         color: currentResult === "A" ? '#81c784' : '#e8eaf6',
                         marginBottom: 2,
@@ -1039,8 +1089,8 @@ function AdminDashboard() {
                       }}>
                         {currentResult === "A" && "👑 "}{p.a}
                       </div>
-                      <div style={{ 
-                        fontSize: 14, 
+                      <div style={{
+                        fontSize: 14,
                         fontWeight: 'bold',
                         color: currentResult === "B" ? '#81c784' : (isBye ? '#94a3b8' : '#e8eaf6'),
                         opacity: isBye ? 0.6 : 1,
@@ -1051,7 +1101,7 @@ function AdminDashboard() {
                         {currentResult === "B" && "👑 "}{p.b}
                       </div>
                     </div>
-                    
+
                     {/* Status Indicator */}
                     <div style={{ flexShrink: 0 }}>
                       {isCompleted ? (
@@ -1065,7 +1115,7 @@ function AdminDashboard() {
                           textTransform: 'uppercase',
                           letterSpacing: 0.5
                         }}>
-                          {isBye ? "BYE" : currentResult === "TIE" ? "DBL LOSS" : "DONE"}
+                          {isBye ? "BYE" : currentResult === "TIE" ? "DRAW" : scoreLabel ? scoreLabel : "DONE"}
                         </div>
                       ) : (
                         <div style={{
@@ -1095,16 +1145,23 @@ function AdminDashboard() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
               {pairs.map((p) => {
                 const isBye = p.b === "BYE";
-                const currentResult = results[p.match_id];
+                const cr = results[p.match_id];
+                const currentResult = cr?.outcome;
+                const currentScore = cr?.score;
                 const isCompleted = !!currentResult || isBye;
-                
+                const isRetro = (info as any)?.format === "retro";
+                const setR = (outcome: "A" | "B" | "TIE", score?: [number, number]) =>
+                  setResults((prev) => ({ ...prev, [p.match_id]: { outcome, score } }));
+                const scoreMatch = (o: string, s?: [number, number]) =>
+                  currentResult === o && currentScore?.[0] === s?.[0] && currentScore?.[1] === s?.[1];
+
                 return (
                   <div key={p.match_id} className={`pairing-card ${isCompleted ? 'completed' : ''}`}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                       <div className="table-number">#{p.table}</div>
                       {isBye && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>Auto Win</span>}
                     </div>
-                    
+
                     <div style={{ margin: '16px 0' }}>
                       <div className={`player-name ${currentResult === "A" ? "winner" : ""}`}>
                         {currentResult === "A" && "👑 "}
@@ -1113,7 +1170,7 @@ function AdminDashboard() {
                       <div style={{ textAlign: 'center', margin: '8px 0' }}>
                         <span className="vs-badge">VS</span>
                       </div>
-                      <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{ 
+                      <div className={`player-name ${currentResult === "B" ? "winner" : ""}`} style={{
                         opacity: isBye ? 0.5 : 1,
                         fontStyle: isBye ? 'italic' : 'normal'
                       }}>
@@ -1121,29 +1178,62 @@ function AdminDashboard() {
                         {p.b}
                       </div>
                     </div>
-                    
-                    {!isBye && (
+
+                    {!isBye && isRetro ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+                        <button
+                          className={`result-btn ${scoreMatch("A", [2, 0]) ? "selected" : ""}`}
+                          onClick={() => setR("A", [2, 0])}
+                        >
+                          ⚔️ {p.a.split(' ')[0]} 2-0
+                        </button>
+                        <button
+                          className={`result-btn ${scoreMatch("A", [2, 1]) ? "selected" : ""}`}
+                          onClick={() => setR("A", [2, 1])}
+                        >
+                          ⚔️ {p.a.split(' ')[0]} 2-1
+                        </button>
+                        <button
+                          className={`result-btn tie ${scoreMatch("TIE", [1, 1]) ? "selected" : ""}`}
+                          onClick={() => setR("TIE", [1, 1])}
+                        >
+                          🤝 Draw 1-1
+                        </button>
+                        <button
+                          className={`result-btn ${scoreMatch("B", [1, 2]) ? "selected" : ""}`}
+                          onClick={() => setR("B", [1, 2])}
+                        >
+                          ⚔️ {p.b.split(' ')[0]} 2-1
+                        </button>
+                        <button
+                          className={`result-btn ${scoreMatch("B", [0, 2]) ? "selected" : ""}`}
+                          onClick={() => setR("B", [0, 2])}
+                        >
+                          ⚔️ {p.b.split(' ')[0]} 2-0
+                        </button>
+                      </div>
+                    ) : !isBye ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
                         <button
                           className={`result-btn ${currentResult === "A" ? "selected" : ""}`}
-                          onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "A" }))}
+                          onClick={() => setR("A")}
                         >
                           ⚔️ {p.a.split(' ')[0]} Wins
                         </button>
                         <button
                           className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
-                          onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
+                          onClick={() => setR("TIE")}
                         >
                           💀 Double Loss
                         </button>
                         <button
                           className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
-                          onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "B" }))}
+                          onClick={() => setR("B")}
                         >
                           ⚔️ {p.b.split(' ')[0]} Wins
                         </button>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 );
               })}
@@ -1165,7 +1255,8 @@ function AdminDashboard() {
                   <th style={{ width: 80 }}>MW%</th>
                   <th style={{ width: 80 }}>OMW%</th>
                   <th style={{ width: 80 }}>OOMW%</th>
-                  <th style={{ width: 120 }}>DDD</th>
+                  {(info as any)?.format === "retro" && <th style={{ width: 80 }}>GW%</th>}
+                  <th style={{ width: 120 }}>{(info as any)?.format === "retro" ? "GWP" : "DDD"}</th>
                   <th style={{ width: 120 }}>KTS</th>
                   <th style={{ width: 140 }}>Deck</th>
                   <th style={{ width: 80 }}>Status</th>
@@ -1196,6 +1287,7 @@ function AdminDashboard() {
                     <td style={{ textAlign: 'center' }}>{r.mw.toFixed(1)}</td>
                     <td style={{ textAlign: 'center' }}>{r.omw.toFixed(1)}</td>
                     <td style={{ textAlign: 'center' }}>{r.oomw.toFixed(1)}</td>
+                    {(info as any)?.format === "retro" && <td style={{ textAlign: 'center' }}>{(r as any).gw?.toFixed(1) ?? "-"}</td>}
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.ddd}</td>
                     <td style={{ textAlign: 'center', fontSize: 12 }}>{r.kts}</td>
                     <td style={{ textAlign: 'left', minWidth: 160 }}>
@@ -1373,10 +1465,11 @@ function AdminDashboard() {
                     <th>Opponent</th>
                     <th>Deck</th>
                     <th style={{ width: 120 }}>Result</th>
+                    {(info as any)?.format === "retro" && <th style={{ width: 60 }}>Score</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {historyData.map((h) => (
+                  {historyData.map((h: any) => (
                     <tr key={h.match_id}>
                       <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{h.round}</td>
                       <td>{h.opponent}</td>
@@ -1388,11 +1481,16 @@ function AdminDashboard() {
                         fontWeight: 'bold',
                         color: h.result === 'Win' || h.result === 'BYE (Win)' ? '#81c784'
                           : h.result === 'Loss' ? '#ef5350'
-                          : h.result === 'Double Loss' ? '#ff9800'
+                          : (h.result === 'Double Loss' || h.result === 'Draw') ? '#ff9800'
                           : '#90caf9'
                       }}>
                         {h.result}
                       </td>
+                      {(info as any)?.format === "retro" && (
+                        <td style={{ textAlign: 'center', fontWeight: 'bold', color: '#b39ddb' }}>
+                          {h.score || '—'}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

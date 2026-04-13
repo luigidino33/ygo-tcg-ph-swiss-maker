@@ -121,6 +121,7 @@ type PlayerStat = {
   tournaments: number;
   wins: number;
   losses: number;
+  draws: number;
   win_rate: number;
   avg_omw: number;
 };
@@ -157,6 +158,7 @@ function SortArrow({ column, sortKey, sortDir }: { column: string; sortKey: stri
 
 export default function PlayersPage() {
   const [tab, setTab] = useState<"history" | "leaderboard" | "metagame">("history");
+  const [formatFilter, setFormatFilter] = useState<"all" | "standard" | "retro">("all");
   const [history, setHistory] = useState<TournamentHistoryEntry[]>([]);
   const [players, setPlayers] = useState<PlayerStat[]>([]);
   const [metagame, setMetagame] = useState<MetagameEntry[]>([]);
@@ -167,10 +169,11 @@ export default function PlayersPage() {
     const load = async () => {
       setLoading(true);
       try {
+        const fmtParam = formatFilter !== "all" ? `?format=${formatFilter}` : "";
         const [h, p, m] = await Promise.all([
-          fetchJSON("/api/tournament-history"),
-          fetchJSON("/api/all-player-stats"),
-          fetchJSON("/api/global-metagame"),
+          fetchJSON(`/api/tournament-history${fmtParam}`),
+          fetchJSON(`/api/all-player-stats${fmtParam}`),
+          fetchJSON(`/api/global-metagame${fmtParam}`),
         ]);
         setHistory(h.tournaments || []);
         setPlayers(p.players || []);
@@ -192,7 +195,7 @@ export default function PlayersPage() {
       }
     };
     load();
-  }, []);
+  }, [formatFilter]);
 
   return (
     <main style={{ maxWidth: 1000, margin: "0 auto" }}>
@@ -217,6 +220,21 @@ export default function PlayersPage() {
             {t === "history" && "📜 Tournaments"}
             {t === "leaderboard" && "🏆 Leaderboard"}
             {t === "metagame" && "📊 Metagame"}
+          </button>
+        ))}
+      </div>
+
+      {/* Format filter */}
+      <div className="card" style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ color: "#90caf9", fontSize: 12, fontWeight: "bold", marginRight: 4 }}>FORMAT:</span>
+        {(["all", "standard", "retro"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFormatFilter(f)}
+            className={formatFilter === f ? "" : "secondary"}
+            style={{ fontSize: 11, padding: "6px 12px" }}
+          >
+            {f === "all" ? "All" : f === "standard" ? "⚔️ Standard" : "🕹️ Retro"}
           </button>
         ))}
       </div>
@@ -260,6 +278,10 @@ function HistoryTab({ history }: { history: TournamentHistoryEntry[] }) {
               <div style={{ fontSize: 12, color: "#90caf9" }}>
                 {h.player_count} players
                 {h.created_at ? ` \u2022 ${new Date(h.created_at).toLocaleDateString()}` : ""}
+                {" \u2022 "}
+                <span style={{ color: (h as any).format === "retro" ? "#ce93d8" : "#64b5f6" }}>
+                  {(h as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
+                </span>
               </div>
             </div>
             <a href={`/view/${h.id}`} style={{ textDecoration: "none" }}>
@@ -272,7 +294,7 @@ function HistoryTab({ history }: { history: TournamentHistoryEntry[] }) {
   );
 }
 
-type LeaderSortKey = "wins" | "losses" | "win_rate" | "tournaments" | "avg_omw" | "name";
+type LeaderSortKey = "wins" | "losses" | "draws" | "win_rate" | "tournaments" | "avg_omw" | "name";
 
 function LeaderboardTab({ players }: { players: PlayerStat[] }) {
   const [sortKey, setSortKey] = useState<LeaderSortKey>("wins");
@@ -328,6 +350,9 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
               <th style={thStyle("losses", 60)} onClick={() => toggleSort("losses")}>
                 L <SortArrow column="losses" sortKey={sortKey} sortDir={sortDir} />
               </th>
+              <th style={thStyle("draws", 60)} onClick={() => toggleSort("draws")}>
+                D <SortArrow column="draws" sortKey={sortKey} sortDir={sortDir} />
+              </th>
               <th style={thStyle("win_rate", 80)} onClick={() => toggleSort("win_rate")}>
                 Win% <SortArrow column="win_rate" sortKey={sortKey} sortDir={sortDir} />
               </th>
@@ -349,6 +374,7 @@ function LeaderboardTab({ players }: { players: PlayerStat[] }) {
                 <td style={{ textAlign: "center" }}>{p.tournaments}</td>
                 <td style={{ textAlign: "center", color: "#81c784" }}>{p.wins}</td>
                 <td style={{ textAlign: "center", color: "#ef5350" }}>{p.losses}</td>
+                <td style={{ textAlign: "center", color: "#ff9800" }}>{p.draws}</td>
                 <td style={{ textAlign: "center", fontWeight: "bold" }}>{p.win_rate}%</td>
                 <td style={{ textAlign: "center" }}>{p.avg_omw}%</td>
               </tr>
