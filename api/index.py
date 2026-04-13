@@ -153,6 +153,7 @@ class Node:
   name: str
   wins: List[object] = field(default_factory=list)    # Node or "BYE"
   losses: List[object] = field(default_factory=list)  # Node
+  draws: List[object] = field(default_factory=list)   # Node (retro format)
   lost_rounds: List[int] = field(default_factory=list)
 
   def num_byes(self) -> int:
@@ -162,17 +163,18 @@ class Node:
     return sum(1 for w in self.wins if w != "BYE")
 
   def matches_played_excl_bye(self) -> int:
-    return self.wins_excl_bye() + len(self.losses)
+    return self.wins_excl_bye() + len(self.losses) + len(self.draws)
 
   def match_points(self) -> int:
-    # Win=3, Tie=0, Loss=0; BYE counts as Win for points
-    return 3 * len(self.wins)
+    # Win=3, Draw=1 (retro), Loss=0; BYE counts as Win for points
+    return 3 * len(self.wins) + 1 * len(self.draws)
 
   def match_win_pct(self) -> float:
     denom = self.matches_played_excl_bye()
     return (self.wins_excl_bye() / denom) if denom else 0.0
 
 def rebuild_graph(t: dict) -> Dict[str, Node]:
+  is_retro = t.get("format") == "retro"
   players = {p["id"]: Node(id=p["id"], name=p["name"]) for p in t["players"]}
   for rnd in t.get("rounds", []):
     n = rnd["n"]
@@ -192,13 +194,18 @@ def rebuild_graph(t: dict) -> Dict[str, Node]:
       elif r == "B":
         b.wins.append(a); a.losses.append(b); a.lost_rounds.append(n)
       elif r == "TIE":
-        a.losses.append(b); b.losses.append(a)
-        a.lost_rounds.append(n); b.lost_rounds.append(n)
+        if is_retro:
+          # Retro: TIE = Draw (1pt each, no loss recorded)
+          a.draws.append(b); b.draws.append(a)
+        else:
+          # Standard: TIE = Double Loss (0pt each)
+          a.losses.append(b); b.losses.append(a)
+          a.lost_rounds.append(n); b.lost_rounds.append(n)
   return players
 
 def opp_win_pct(p: Node) -> float:
   tot, num = 0.0, 0
-  for opp in p.wins + p.losses:
+  for opp in p.wins + p.losses + p.draws:
     if opp == "BYE":
       continue
     tot += opp.match_win_pct()
@@ -214,7 +221,7 @@ def compute_standings(t: dict):
     aa = p.match_points()
     bbb = max(0, int(round(opp_win_pct(p), 3) * 1000))
     acc, nopp = 0.0, 0
-    for opp in p.wins + p.losses:
+    for opp in p.wins + p.losses + p.draws:
       if opp == "BYE":
         continue
       acc += opp_win_pct(opp); nopp += 1
@@ -240,6 +247,7 @@ def compute_standings(t: dict):
   return rows
 
 def player_match_history(t: dict, player_id: str) -> list[dict]:
+  is_retro = t.get("format") == "retro"
   id2name = {p["id"]: p["name"] for p in t["players"]}
   id2deck = {p["id"]: p.get("deck", "") for p in t["players"]}
   history = []
@@ -253,7 +261,7 @@ def player_match_history(t: dict, player_id: str) -> list[dict]:
       elif r == "BYE":
         result = "BYE (Win)"
       elif r == "TIE":
-        result = "Double Loss"
+        result = "Draw" if is_retro else "Double Loss"
       elif r == "A":
         result = "Win" if m["a"] == player_id else "Loss"
       elif r == "B":
@@ -536,11 +544,16 @@ def create_tournament():
     if not players:
       return jsonify({"error": "players list is required"}), 400
 
+    fmt = (data.get("format") or "standard").strip().lower()
+    if fmt not in ("standard", "retro"):
+      fmt = "standard"
+
     tid = uuid.uuid4().hex[:10]
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     tdoc = {
       "name": name,
       "total_rounds": total_rounds,
+      "format": fmt,
       "players": [{"id": new_id("p"), "name": n} for n in players],
       "rounds": [],
       "created_at": created_at,
@@ -549,7 +562,7 @@ def create_tournament():
 
     # Update tournament index
     idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
-    idx.append({"id": tid, "name": name, "created_at": created_at, "player_count": len(players)})
+    idx.append({"id": tid, "name": name, "created_at": created_at, "player_count": len(players), "format": fmt})
     kv_set_json(TOURNAMENT_INDEX_KEY, idx)
 
     initial_info = {
@@ -573,6 +586,7 @@ def get_tournament(tid):
       "id": tid,
       "name": t["name"],
       "total_rounds": t["total_rounds"],
+      "format": t.get("format", "standard"),
       "round": current_round_number(t),
       "players": t.get("players", []),
       "dropped": t.get("dropped", []),
@@ -924,6 +938,7 @@ def _rebuild_tournament_index() -> list[dict]:
       "name": t.get("name", "Unknown"),
       "created_at": t.get("created_at", ""),
       "player_count": len(t.get("players", [])),
+      "format": t.get("format", "standard"),
     })
   idx.sort(key=lambda x: x.get("created_at", ""), reverse=True)
   kv_set_json(TOURNAMENT_INDEX_KEY, idx)
@@ -933,6 +948,9 @@ def _rebuild_tournament_index() -> list[dict]:
 def api_tournament_history():
   try:
     idx = _rebuild_tournament_index()
+    fmt = (request.args.get("format") or "").strip().lower()
+    if fmt in ("standard", "retro"):
+      idx = [e for e in idx if e.get("format", "standard") == fmt]
     return jsonify({"tournaments": idx})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -1201,6 +1219,9 @@ def api_admin_auth():
 def api_all_player_stats():
   try:
     idx = _rebuild_tournament_index()
+    fmt = (request.args.get("format") or "").strip().lower()
+    if fmt in ("standard", "retro"):
+      idx = [e for e in idx if e.get("format", "standard") == fmt]
     # Aggregate stats per unique player name (case-insensitive)
     player_map: Dict[str, dict] = {}
 
@@ -1222,6 +1243,7 @@ def api_all_player_stats():
             "tournaments": 0,
             "wins": 0,
             "losses": 0,
+            "draws": 0,
             "byes": 0,
             "omw_sum": 0.0,
             "omw_count": 0,
@@ -1230,6 +1252,7 @@ def api_all_player_stats():
         s["tournaments"] += 1
         s["wins"] += node.wins_excl_bye()
         s["losses"] += len(node.losses)
+        s["draws"] += len(node.draws)
         s["byes"] += node.num_byes()
         omw = opp_win_pct(node) * 100.0
         s["omw_sum"] += omw
@@ -1237,12 +1260,13 @@ def api_all_player_stats():
 
     result = []
     for s in player_map.values():
-      total = s["wins"] + s["losses"]
+      total = s["wins"] + s["losses"] + s["draws"]
       result.append({
         "name": s["name"],
         "tournaments": s["tournaments"],
         "wins": s["wins"],
         "losses": s["losses"],
+        "draws": s["draws"],
         "win_rate": round(s["wins"] / total * 100, 1) if total else 0,
         "avg_omw": round(s["omw_sum"] / s["omw_count"], 1) if s["omw_count"] else 0,
       })
@@ -1258,6 +1282,9 @@ def api_all_player_stats():
 def api_global_metagame():
   try:
     idx = _rebuild_tournament_index()
+    fmt = (request.args.get("format") or "").strip().lower()
+    if fmt in ("standard", "retro"):
+      idx = [e for e in idx if e.get("format", "standard") == fmt]
     arch_stats: Dict[str, dict] = {}
     total_entries = 0
 

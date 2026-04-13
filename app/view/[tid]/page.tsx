@@ -102,7 +102,7 @@ export default function ViewPage() {
         <h1>{info?.name || "Tournament"}</h1>
         {info && (
           <p style={{ color: "#cbd5e1", fontSize: 14, fontWeight: 500 }}>
-            Round {info.round} of {info.total_rounds} &bull; {info.players?.length || 0} Duelists
+            Round {info.round} of {info.total_rounds} &bull; {info.players?.length || 0} Duelists &bull; {info.format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
           </p>
         )}
         <p style={{ color: "#90caf9", fontSize: 12, marginTop: 4 }}>
@@ -251,7 +251,7 @@ export default function ViewPage() {
                         ? "#81c784"
                         : h.result === "Loss"
                         ? "#ef5350"
-                        : h.result === "Double Loss"
+                        : (h.result === "Double Loss" || h.result === "Draw")
                         ? "#ff9800"
                         : "#94a3b8";
                     return (

@@ -204,6 +204,7 @@ function AdminDashboard() {
   const [playersText, setPlayersText] = useState("");
   const [name, setName] = useState("BDC Weekly");
   const [rounds, setRounds] = useState(4);
+  const [format, setFormat] = useState<"standard" | "retro">("standard");
   const [results, setResults] = useState<Record<string, "A" | "B" | "TIE">>({});
 
   // Tournament history
@@ -288,7 +289,7 @@ function AdminDashboard() {
       const data = await fetchJSON(`/api/tournaments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, total_rounds: rounds, players: playersList }),
+        body: JSON.stringify({ name, total_rounds: rounds, players: playersList, format }),
       });
       localStorage.setItem("tid", data.tournament_id);
       setTid(data.tournament_id);
@@ -815,6 +816,28 @@ function AdminDashboard() {
             })()}
           </div>
           <div>
+            <label>Format</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setFormat("standard")}
+                className={format === "standard" ? "" : "secondary"}
+                style={{ flex: 1, fontSize: 13 }}
+              >
+                Standard
+              </button>
+              <button
+                onClick={() => setFormat("retro")}
+                className={format === "retro" ? "" : "secondary"}
+                style={{ flex: 1, fontSize: 13 }}
+              >
+                Retro
+              </button>
+            </div>
+            <p style={{ color: '#90caf9', fontSize: 11, marginTop: 4 }}>
+              {format === "retro" ? "Retro: Ties = Draw (1pt each)" : "Standard: Ties = Double Loss (0pt each)"}
+            </p>
+          </div>
+          <div>
             <label>Players (one per line)</label>
             <textarea
               value={playersText}
@@ -896,7 +919,7 @@ function AdminDashboard() {
             {info && (
               <>
                 <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
-                  Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists
+                  Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists • {(info as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
                 </p>
                 <p style={{ color: '#90caf9', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
                   Tournament ID: {info.id}
@@ -967,7 +990,7 @@ function AdminDashboard() {
                   <option value="PENDING">Pending</option>
                   <option value="A">Player A Won</option>
                   <option value="B">Player B Won</option>
-                  <option value="TIE">Double Loss</option>
+                  <option value="TIE">{(info as any)?.format === "retro" ? "Draw" : "Double Loss"}</option>
                 </select>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -1134,7 +1157,7 @@ function AdminDashboard() {
                           className={`result-btn tie ${currentResult === "TIE" ? "selected" : ""}`}
                           onClick={() => setResults((prev) => ({ ...prev, [p.match_id]: "TIE" }))}
                         >
-                          💀 Double Loss
+                          {(info as any)?.format === "retro" ? "🤝 Draw" : "💀 Double Loss"}
                         </button>
                         <button
                           className={`result-btn ${currentResult === "B" ? "selected" : ""}`}
@@ -1388,7 +1411,7 @@ function AdminDashboard() {
                         fontWeight: 'bold',
                         color: h.result === 'Win' || h.result === 'BYE (Win)' ? '#81c784'
                           : h.result === 'Loss' ? '#ef5350'
-                          : h.result === 'Double Loss' ? '#ff9800'
+                          : (h.result === 'Double Loss' || h.result === 'Draw') ? '#ff9800'
                           : '#90caf9'
                       }}>
                         {h.result}
