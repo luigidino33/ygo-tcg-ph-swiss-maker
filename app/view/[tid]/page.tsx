@@ -106,7 +106,7 @@ export default function ViewPage() {
             Round {info.round} of {info.total_rounds} &bull; {info.players?.length || 0} Duelists &bull; {info.format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
           </p>
         )}
-        <p style={{ color: "#90caf9", fontSize: 12, marginTop: 4 }}>
+        <p style={{ color: "#d8c28a", fontSize: 12, marginTop: 4 }}>
           Live view &mdash; auto-refreshes every 8 seconds &bull; Click a player name to see match history
         </p>
       </div>
@@ -125,15 +125,15 @@ export default function ViewPage() {
                     alignItems: "center",
                     gap: 12,
                     padding: 12,
-                    background: "rgba(26, 35, 126, 0.4)",
-                    border: "2px solid #5c6bc0",
+                    background: "rgba(10, 16, 40, 0.65)",
+                    border: "2px solid #8a7440",
                     borderRadius: 8,
                   }}
                 >
                   <div
                     style={{
-                      background: "linear-gradient(135deg, #64b5f6, #90caf9)",
-                      color: "#0c1445",
+                      background: "linear-gradient(135deg, #d6b25e, #d8c28a)",
+                      color: "#060a1a",
                       fontWeight: 900,
                       fontSize: 16,
                       padding: "6px 12px",
@@ -199,7 +199,7 @@ export default function ViewPage() {
                     <td>
                       <span
                         onClick={() => loadHistory(r.player_id, r.player)}
-                        style={{ fontWeight: "bold", cursor: "pointer", borderBottom: "1px dashed #5c6bc0" }}
+                        style={{ fontWeight: "bold", cursor: "pointer", borderBottom: "1px dashed #8a7440" }}
                         title="View match history"
                       >
                         {r.player}

@@ -66,7 +66,7 @@ function ArchetypePieChart({ metagame, archImages }: { metagame: MetagameEntry[]
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {/* Donut slices */}
         {slices.map((s, i) => (
-          <path key={i} d={s.d} fill={s.color} stroke="#0c1445" strokeWidth={1.5} />
+          <path key={i} d={s.d} fill={s.color} stroke="#060a1a" strokeWidth={1.5} />
         ))}
         {/* Images + lines for major slices */}
         {slices.map((s, i) => {
@@ -102,7 +102,7 @@ function ArchetypePieChart({ metagame, archImages }: { metagame: MetagameEntry[]
           );
         })}
         {/* Center text */}
-        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#90caf9" fontWeight="bold">{total}</text>
+        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#d8c28a" fontWeight="bold">{total}</text>
         <text x={cx} y={cy + 10} textAnchor="middle" fontSize={9} fill="#546e7a">entries</text>
       </svg>
     </div>
@@ -148,12 +148,12 @@ const fetchJSON = async (url: string) => {
   return data;
 };
 
-const PIE_COLORS = ['#64b5f6','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#90caf9'];
+const PIE_COLORS = ['#d6b25e','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#d8c28a'];
 
 // Sort arrow indicator
 function SortArrow({ column, sortKey, sortDir }: { column: string; sortKey: string; sortDir: "asc" | "desc" }) {
   if (column !== sortKey) return <span style={{ color: "#546e7a", marginLeft: 2 }}>↕</span>;
-  return <span style={{ color: "#64b5f6", marginLeft: 2 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
+  return <span style={{ color: "#d6b25e", marginLeft: 2 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
 }
 
 export default function PlayersPage() {
@@ -226,7 +226,7 @@ export default function PlayersPage() {
 
       {/* Format filter */}
       <div className="card" style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ color: "#90caf9", fontSize: 12, fontWeight: "bold", marginRight: 4 }}>FORMAT:</span>
+        <span style={{ color: "#d8c28a", fontSize: 12, fontWeight: "bold", marginRight: 4 }}>FORMAT:</span>
         {(["standard", "retro"] as const).map((f) => (
           <button
             key={f}
@@ -268,18 +268,18 @@ function HistoryTab({ history }: { history: TournamentHistoryEntry[] }) {
               alignItems: "center",
               gap: 12,
               padding: 12,
-              background: "rgba(26, 35, 126, 0.4)",
-              border: "2px solid #5c6bc0",
+              background: "rgba(10, 16, 40, 0.65)",
+              border: "2px solid #8a7440",
               borderRadius: 8,
             }}
           >
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: "bold", fontSize: 14 }}>{h.name}</div>
-              <div style={{ fontSize: 12, color: "#90caf9" }}>
+              <div style={{ fontSize: 12, color: "#d8c28a" }}>
                 {h.player_count} players
                 {h.created_at ? ` \u2022 ${new Date(h.created_at).toLocaleDateString()}` : ""}
                 {" \u2022 "}
-                <span style={{ color: (h as any).format === "retro" ? "#ce93d8" : "#64b5f6" }}>
+                <span style={{ color: (h as any).format === "retro" ? "#ce93d8" : "#d6b25e" }}>
                   {(h as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
                 </span>
               </div>
@@ -478,7 +478,7 @@ function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; arch
           </thead>
           <tbody>
             {sorted.map((m, i) => {
-              const tierColor = m.tier === "Tier 1" ? "#81c784" : m.tier === "Tier 2" ? "#ffb74d" : "#90caf9";
+              const tierColor = m.tier === "Tier 1" ? "#81c784" : m.tier === "Tier 2" ? "#ffb74d" : "#d8c28a";
               const imgUrl = archImages[m.archetype];
               return (
                 <tr key={m.archetype}>
@@ -505,7 +505,7 @@ function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; arch
                   <td style={{ textAlign: "center", fontWeight: "bold", color: m.conversion >= 30 ? "#81c784" : m.conversion >= 15 ? "#ffb74d" : "#ef5350" }}>
                     {m.conversion}%
                   </td>
-                  <td style={{ textAlign: "center", color: "#90caf9" }}>{m.avg_placement}</td>
+                  <td style={{ textAlign: "center", color: "#d8c28a" }}>{m.avg_placement}</td>
                 </tr>
               );
             })}

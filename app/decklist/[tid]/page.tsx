@@ -289,7 +289,7 @@ export default function DecklistPage() {
             Thanks, {player?.name}! Your decklist ({mainCount} Main / {extraCount} Extra / {sideCount} Side) has been
             sent to the organizer.
           </p>
-          <p style={{ color: "#90caf9", fontSize: 13 }}>Decklists are only visible to the tournament organizer.</p>
+          <p style={{ color: "#d8c28a", fontSize: 13 }}>Decklists are only visible to the tournament organizer.</p>
         </div>
       </div>
     );
@@ -313,12 +313,12 @@ export default function DecklistPage() {
             ))}
           </select>
           {open.length === 0 && (
-            <p style={{ color: "#90caf9", fontSize: 13, marginBottom: 12 }}>Everyone has already submitted a decklist.</p>
+            <p style={{ color: "#d8c28a", fontSize: 13, marginBottom: 12 }}>Everyone has already submitted a decklist.</p>
           )}
           <button disabled={!playerId} onClick={() => setStarted(true)} style={{ width: "100%" }}>
             Build Deck
           </button>
-          <p style={{ color: "#90caf9", fontSize: 12, marginTop: 12 }}>
+          <p style={{ color: "#d8c28a", fontSize: 12, marginTop: 12 }}>
             Cards, GOAT banlist and limits are enforced. Once submitted, only the organizer can see or reset your list.
           </p>
         </div>
@@ -329,42 +329,46 @@ export default function DecklistPage() {
   // ── Builder ──
   const renderSection = (section: Section) => {
     const tiles = sortedTiles(section);
-    const count = sumCounts(deck[section]);
-    const bad = section === "main" ? count < LIMITS.main.min : false;
+    const count = tiles.length;
+    const slots = Math.max(section === "main" ? LIMITS.main.min : LIMITS[section].max, count);
+    const short = section === "main" && count < LIMITS.main.min;
     return (
-      <div className="card" style={{ padding: 12, marginBottom: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-          <strong style={{ color: bad ? "#ef9a9a" : "#e8eaf6" }}>
-            {SECTION_LABEL[section]} ({count}
-            {section === "main" ? `/${LIMITS.main.min}-${LIMITS.main.max}` : `/${LIMITS[section].max}`})
-          </strong>
+      <div className="md-section">
+        <div className="md-section-head">
+          <span className="md-section-title">{SECTION_LABEL[section]}</span>
           {section === "main" && (
-            <span style={{ fontSize: 12, color: "#90caf9" }}>
-              {mainBreakdown.Monster} Monsters / {mainBreakdown.Spell} Spells / {mainBreakdown.Trap} Traps
+            <span className="md-breakdown">
+              <span><i style={{ background: "#e08a2e" }} />{mainBreakdown.Monster}</span>
+              <span><i style={{ background: "#1fa88e" }} />{mainBreakdown.Spell}</span>
+              <span><i style={{ background: "#c2478a" }} />{mainBreakdown.Trap}</span>
             </span>
           )}
+          <span className="md-count" style={short ? { color: "#ff8a80", borderColor: "#ff8a80" } : undefined}>
+            {count}
+            <small>/{section === "main" ? `${LIMITS.main.min}-${LIMITS.main.max}` : LIMITS[section].max}</small>
+          </span>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(58px, 1fr))", gap: 4, minHeight: 60 }}>
+        <div className="md-grid">
           {tiles.map(({ card, key }) => (
-            <div key={key} style={{ position: "relative" }}>
+            <div key={key} className="md-slot md-filled">
               <img
                 src={`/api/card-image/${card.img}`}
                 alt={card.name}
                 title={card.name}
                 loading="lazy"
                 onClick={() => setPreview(card)}
-                style={{ width: "100%", display: "block", borderRadius: 3, cursor: "pointer", border: card.ban ? `2px solid ${banColor(card.ban)}` : "2px solid transparent" }}
               />
-              <button
-                aria-label={`Remove ${card.name}`}
-                className="gb-remove"
-                onClick={() => removeCard(section, card.id)}
-              >
+              {card.ban && banLimit(card.ban) > 0 && (
+                <span className="md-ban" style={{ background: banColor(card.ban) }}>{banLimit(card.ban)}</span>
+              )}
+              <button aria-label={`Remove ${card.name}`} className="gb-remove" onClick={() => removeCard(section, card.id)}>
                 ×
               </button>
             </div>
           ))}
-          {tiles.length === 0 && <span style={{ color: "#7986cb", fontSize: 12 }}>Empty</span>}
+          {Array.from({ length: Math.max(0, slots - count) }, (_, i) => (
+            <div key={`e${i}`} className="md-slot md-empty" />
+          ))}
         </div>
       </div>
     );
@@ -379,13 +383,13 @@ export default function DecklistPage() {
              <div
               onClick={(e) => e.stopPropagation()}
               style={isMobile
-                ? { display: "flex", gap: 12, width: "100%", maxHeight: "85vh", overflow: "auto", padding: "16px 14px calc(16px + env(safe-area-inset-bottom))", background: "linear-gradient(135deg, #1a237e, #283593)", borderTop: "3px solid #64b5f6", borderRadius: "12px 12px 0 0", flexWrap: "wrap" }
+                ? { display: "flex", gap: 12, width: "100%", maxHeight: "85vh", overflow: "auto", padding: "16px 14px calc(16px + env(safe-area-inset-bottom))", background: "linear-gradient(135deg, #0e1638, #16214a)", borderTop: "3px solid #d6b25e", borderRadius: "12px 12px 0 0", flexWrap: "wrap" }
                 : { display: "flex", gap: 12 }}
              >
               <img src={`/api/card-image/${preview.img}?size=big`} alt={preview.name} style={{ width: 120, alignSelf: "flex-start", borderRadius: 4 }} />
               <div style={{ fontSize: 12, minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: "bold", fontSize: 14 }}>{preview.name}</div>
-                <div style={{ color: "#90caf9", marginBottom: 6 }}>
+                <div style={{ color: "#d8c28a", marginBottom: 6 }}>
                   [{preview.type}
                   {preview.race ? ` / ${preview.race}` : ""}
                   {preview.attribute ? ` / ${preview.attribute}` : ""}
@@ -432,15 +436,33 @@ export default function DecklistPage() {
         .gb-tabs { display: none; gap: 8px; margin-bottom: 12px; }
         .gb-search { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; }
         .gb-bottombar { display: none; }
-        .gb-remove { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 18px; background: #c62828; border: 1px solid #fff; letter-spacing: 0; }
+        .md-panel { background: linear-gradient(180deg, #080c2b 0%, #0d1540 100%); border: 1px solid rgba(214, 178, 94, 0.55); border-radius: 10px; padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.5), inset 0 0 40px rgba(60,80,200,0.08); }
+        .md-section + .md-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(214, 178, 94, 0.25); }
+        .md-section-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .md-section-title { font-weight: 800; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #f3e3b3; padding-left: 10px; border-left: 3px solid #d6b25e; }
+        .md-breakdown { display: flex; gap: 10px; font-size: 12px; color: #cfd8ff; }
+        .md-breakdown span { display: inline-flex; align-items: center; gap: 4px; }
+        .md-breakdown i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+        .md-count { margin-left: auto; font-weight: 800; font-size: 15px; color: #f3e3b3; padding: 2px 10px; border: 1px solid rgba(214,178,94,0.6); border-radius: 999px; background: rgba(0,0,0,0.35); }
+        .md-count small { font-weight: 600; font-size: 11px; color: #9fb0ff; margin-left: 1px; }
+        .md-grid { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 5px; }
+        .md-slot { position: relative; aspect-ratio: 421 / 614; border-radius: 3px; }
+        .md-empty { background: rgba(255,255,255,0.03); border: 1px dashed rgba(143,160,255,0.22); }
+        .md-filled img { width: 100%; height: 100%; display: block; border-radius: 3px; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.6); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+        .md-filled:hover img { transform: translateY(-3px) scale(1.05); box-shadow: 0 6px 14px rgba(0,0,0,0.8), 0 0 0 1px #d6b25e; z-index: 2; position: relative; }
+        .md-ban { position: absolute; top: -4px; left: -4px; width: 17px; height: 17px; border-radius: 50%; color: #1a1a1a; font-size: 11px; font-weight: 900; display: flex; align-items: center; justify-content: center; border: 1px solid #fff; z-index: 3; pointer-events: none; }
+        .gb-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 13px; line-height: 16px; background: #c62828; border: 1px solid #fff; letter-spacing: 0; z-index: 4; opacity: 0; transition: opacity 0.12s; }
+        .md-filled:hover .gb-remove, .gb-remove:focus { opacity: 1; }
         @media (max-width: 900px) {
           main.gb-root { padding-bottom: 76px; }
           .gb-bottombar {
             display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; gap: 10px; align-items: center;
-            padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #0c1445; border-top: 2px solid #64b5f6;
+            padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #060a1a; border-top: 2px solid #d6b25e;
           }
           .gb-hide-desktop-submit { display: none; }
-          .gb-remove { width: 30px; height: 30px; top: -8px; right: -8px; font-size: 18px; line-height: 24px; }
+          .gb-remove { width: 22px; height: 22px; top: -6px; right: -6px; font-size: 15px; line-height: 18px; opacity: 0.85; }
+          .md-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+          .md-panel { padding: 10px; }
           .gb-toast { bottom: 84px !important; }
           .gb-grid { grid-template-columns: 1fr; }
           .gb-tabs { display: flex; }
@@ -453,7 +475,7 @@ export default function DecklistPage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div>
             <h1 style={{ marginBottom: 4 }}>GOAT Deck: {player?.name}</h1>
-            <span style={{ fontSize: 12, color: "#90caf9" }}>{status.name}</span>
+            <span style={{ fontSize: 12, color: "#d8c28a" }}>{status.name}</span>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="secondary" onClick={clearDeck}>Clear</button>
@@ -486,7 +508,7 @@ export default function DecklistPage() {
           <div style={{ fontWeight: "bold", color: mainCount < LIMITS.main.min ? "#ef9a9a" : "#a5d6a7" }}>
             Main {mainCount}/{LIMITS.main.min}-{LIMITS.main.max}
           </div>
-          <div style={{ color: "#90caf9" }}>Extra {extraCount} • Side {sideCount}</div>
+          <div style={{ color: "#d8c28a" }}>Extra {extraCount} • Side {sideCount}</div>
         </div>
         <button className="success" onClick={submit} disabled={submitting || problems.length > 0} style={{ padding: "12px 18px", fontSize: 13 }}>
           {submitting ? "Submitting..." : "Submit"}
@@ -504,9 +526,11 @@ export default function DecklistPage() {
 
       <div className="gb-grid">
         <div className={mobileTab === "deck" ? "" : "gb-hide-mobile"}>
-          {renderSection("main")}
-          {renderSection("extra")}
-          {renderSection("side")}
+          <div className="md-panel">
+            {renderSection("main")}
+            {renderSection("extra")}
+            {renderSection("side")}
+          </div>
         </div>
 
         <div className={`gb-search ${mobileTab === "search" ? "" : "gb-hide-mobile"}`}>
@@ -545,7 +569,7 @@ export default function DecklistPage() {
           {!isMobile && previewEl}
 
           <div className="card" style={{ padding: 8, marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: "#90caf9", padding: "4px 6px" }}>
+            <div style={{ fontSize: 12, color: "#d8c28a", padding: "4px 6px" }}>
               {searching && results.length === 0 ? "Searching..." : total !== null ? `${total} cards` : ""}
             </div>
             {searchError && <p style={{ color: "#ef9a9a", fontSize: 12, padding: 6 }}>{searchError}</p>}
@@ -555,12 +579,12 @@ export default function DecklistPage() {
                 <div
                   key={c.id}
                   onClick={() => setPreview(c)}
-                  style={{ display: "flex", gap: 8, alignItems: "center", padding: 6, borderBottom: "1px solid rgba(100,181,246,0.2)", cursor: "pointer" }}
+                  style={{ display: "flex", gap: 8, alignItems: "center", padding: 6, borderBottom: "1px solid rgba(214, 178, 94, 0.2)", cursor: "pointer" }}
                 >
                   <img src={`/api/card-image/${c.img}`} alt="" loading="lazy" style={{ width: 40, borderRadius: 2 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
-                    <div style={{ fontSize: 11, color: "#90caf9" }}>
+                    <div style={{ fontSize: 11, color: "#d8c28a" }}>
                       {c.type}
                       {c.level ? ` • Lv ${c.level}` : ""}
                       {c.ban && <span style={{ color: banColor(c.ban), fontWeight: "bold" }}> • {banLabel(c.ban)}</span>}
@@ -586,7 +610,7 @@ export default function DecklistPage() {
               );
             })}
             {results.length === 0 && !searching && !searchError && (
-              <p style={{ padding: 8, fontSize: 12, color: "#90caf9" }}>No cards found.</p>
+              <p style={{ padding: 8, fontSize: 12, color: "#d8c28a" }}>No cards found.</p>
             )}
             {nextOffset !== null && (
               <button className="secondary" onClick={() => runSearch(nextOffset)} disabled={searching} style={{ width: "100%", marginTop: 8 }}>
