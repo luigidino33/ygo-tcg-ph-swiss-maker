@@ -441,6 +441,28 @@ function AdminDashboard() {
     }
   };
 
+  const revertRound = async () => {
+    if (!tid || !info) return;
+    const prev = info.round - 1;
+    if (!confirm(
+      `Revert to Round ${prev}?\n\nRound ${info.round}'s pairings and any results entered for it will be deleted. ` +
+      `Round ${prev} results stay as they are, so you can fix them with Edit Result and then pair again.`
+    )) return;
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/revert-round`, { method: "POST" });
+      if (!res.ok) throw new Error(res.error || res.message || "Revert failed");
+      setPairs(res.pairs || []);
+      setStandings(res.standings || []);
+      setResults({});
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+    } catch (e) {
+      console.error(e);
+      alert(`Revert failed: ${errMsg(e)}`);
+    }
+  };
+
   const dropPlayer = async (playerId: string, playerName: string) => {
     if (!tid) return;
     if (!confirm(`Drop ${playerName} from the tournament? They won't be paired in future rounds.`)) return;
@@ -1043,6 +1065,9 @@ function AdminDashboard() {
           </button>
           <button onClick={undoFinalize} disabled={pairs.length > 0 || !info?.round} className="secondary">
             ↩️ Undo Finalize
+          </button>
+          <button onClick={revertRound} disabled={!info || info.round < 2} className="secondary">
+            ⏪ Revert to Round {info && info.round > 1 ? info.round - 1 : "—"}
           </button>
           <button onClick={() => setShowPairEditor(true)} disabled={!players.length} className="secondary">
             ✏️ Edit Pairings

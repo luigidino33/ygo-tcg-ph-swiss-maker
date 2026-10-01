@@ -965,6 +965,30 @@ def api_undo_finalize(tid):
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+@app.post("/api/tournaments/<tid>/revert-round")
+def api_revert_round(tid):
+  # Drop the latest round entirely (pairings + results) so the previous round,
+  # with its results intact, becomes current again and can be corrected.
+  try:
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    rounds = t.get("rounds") or []
+    if len(rounds) < 2:
+      return jsonify({"error": "No previous round to revert to."}), 400
+
+    removed = rounds.pop()
+    kv_set_json(tid_key(tid), t)
+    return jsonify({
+      "ok": True,
+      "removed_round": removed.get("n"),
+      "round": rounds[-1].get("n"),
+      "pairs": pairs_for_ui(t),
+      "standings": compute_standings(t),
+    })
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 @app.get("/api/tournaments/<tid>/player-history/<pid>")
 def api_player_history(tid, pid):
   try:
