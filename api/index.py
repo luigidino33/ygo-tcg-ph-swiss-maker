@@ -3,7 +3,8 @@ from __future__ import annotations
 import os, json, random, uuid, time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
-from flask import Flask, request, jsonify
+import hmac
+from flask import Flask, request, jsonify, Response
 
 app = Flask(__name__)
 
@@ -130,6 +131,11 @@ def _fetch_archetype_image(archetype: str) -> Optional[str]:
 
 def tid_key(tid: str) -> str:
   return f"t_{tid}"
+
+def decks_key(tid: str, pid: str = "") -> str:
+  # One key per player so concurrent submissions can't clobber each other.
+  # Not prefixed "t_" so tournament index rebuilds never pick these up.
+  return f"decks_{tid}_{pid}"
 
 def read_tdoc_or_retry(tid: str, attempts: int = 6, delay: float = 0.2):
   key = tid_key(tid)
@@ -584,6 +590,7 @@ def create_tournament():
     fmt = (data.get("format") or "standard").strip().lower()
     if fmt not in ("standard", "retro"):
       fmt = "standard"
+    decklists = bool(data.get("decklists")) and fmt == "retro"
 
     tid = uuid.uuid4().hex[:10]
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -591,6 +598,7 @@ def create_tournament():
       "name": name,
       "total_rounds": total_rounds,
       "format": fmt,
+      "decklists": decklists,
       "players": [{"id": new_id("p"), "name": n} for n in players],
       "rounds": [],
       "created_at": created_at,
@@ -607,6 +615,8 @@ def create_tournament():
       "name": name,
       "total_rounds": total_rounds,
       "round": 0,
+      "format": fmt,
+      "decklists": decklists,
       "players": tdoc["players"],
     }
     return jsonify({"tournament_id": tid, "info": initial_info})
@@ -624,6 +634,7 @@ def get_tournament(tid):
       "name": t["name"],
       "total_rounds": t["total_rounds"],
       "format": t.get("format", "standard"),
+      "decklists": bool(t.get("decklists")),
       "round": current_round_number(t),
       "players": t.get("players", []),
       "dropped": t.get("dropped", []),
@@ -1007,9 +1018,10 @@ def api_tournament_history():
 def api_delete_tournament(tid):
   try:
     import requests as req
-    # Delete the tournament doc
-    url = f"{_kv_url()}/del/{tid_key(tid)}"
-    req.post(url, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+    # Delete the tournament doc (and any submitted decklists)
+    for key in [tid_key(tid)] + kv_keys(f"{decks_key(tid)}*"):
+      url = f"{_kv_url()}/del/{key}"
+      req.post(url, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
 
     # Remove from index
     idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
@@ -1242,6 +1254,210 @@ def api_player_stats():
     stats["tournament_results"].sort(key=lambda x: x.get("date", ""), reverse=True)
 
     return jsonify(stats)
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── GOAT decklists ───────────────────────────────────────────────────────────
+
+YGOPRODECK_CARDINFO = "https://db.ygoprodeck.com/api/v7/cardinfo.php"
+EXTRA_DECK_TYPES = ("Fusion", "Synchro", "XYZ", "Link")
+GOAT_COPY_LIMITS = {"Forbidden": 0, "Limited": 1, "Semi-Limited": 2}
+_card_search_cache: Dict[str, tuple] = {}
+
+def _admin_ok() -> bool:
+  admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+  given = request.headers.get("X-Admin-Password", "")
+  return bool(admin_pw) and hmac.compare_digest(admin_pw.encode(), given.encode())
+
+def _slim_card(c: dict) -> dict:
+  ban = (c.get("banlist_info") or {}).get("ban_goat")
+  imgs = c.get("card_images") or [{}]
+  return {
+    "id": c.get("id"),
+    "name": c.get("name"),
+    "type": c.get("type"),
+    "race": c.get("race"),
+    "attribute": c.get("attribute"),
+    "level": c.get("level"),
+    "atk": c.get("atk"),
+    "def": c.get("def"),
+    "desc": c.get("desc"),
+    "ban": ban,
+    "extra": any(t in (c.get("type") or "") for t in EXTRA_DECK_TYPES),
+    "img": imgs[0].get("id", c.get("id")),
+  }
+
+def _goat_cardinfo(params: dict) -> dict:
+  import requests
+  key = json.dumps(params, sort_keys=True)
+  hit = _card_search_cache.get(key)
+  if hit and time.time() - hit[0] < 600:
+    return hit[1]
+  r = requests.get(YGOPRODECK_CARDINFO, params={**params, "format": "goat"}, timeout=10)
+  if r.status_code == 400:
+    data = {"data": [], "meta": {}}  # API answers 400 when nothing matches
+  else:
+    r.raise_for_status()
+    data = r.json()
+  if len(_card_search_cache) > 500:
+    _card_search_cache.clear()
+  _card_search_cache[key] = (time.time(), data)
+  return data
+
+@app.get("/api/cards/search")
+def api_card_search():
+  try:
+    params: Dict[str, object] = {"num": 40, "offset": max(0, int(request.args.get("offset", 0) or 0)), "sort": "name"}
+    for arg, api_key in (("q", "fname"), ("type", "type"), ("attribute", "attribute"), ("race", "race"), ("level", "level")):
+      v = (request.args.get(arg) or "").strip()
+      if v:
+        params[api_key] = v
+    data = _goat_cardinfo(params)
+    meta = data.get("meta") or {}
+    resp = jsonify({
+      "cards": [_slim_card(c) for c in data.get("data", [])],
+      "next_offset": meta.get("next_page_offset"),
+      "total": meta.get("total_rows"),
+    })
+    resp.headers["Cache-Control"] = "public, s-maxage=600"
+    return resp
+  except Exception as e:
+    return jsonify({"error": str(e)}), 502
+
+@app.get("/api/card-image/<int:cid>")
+def api_card_image(cid):
+  # Proxied + edge-cached so we don't hotlink images.ygoprodeck.com on every view.
+  try:
+    import requests
+    folder = "cards" if request.args.get("size") == "big" else "cards_small"
+    r = requests.get(f"https://images.ygoprodeck.com/images/{folder}/{cid}.jpg", timeout=10)
+    if r.status_code != 200:
+      return Response(status=404)
+    return Response(r.content, mimetype="image/jpeg", headers={
+      "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable"
+    })
+  except Exception:
+    return Response(status=502)
+
+def _decklist_locked(t: dict) -> bool:
+  return bool(t.get("rounds"))
+
+@app.get("/api/tournaments/<tid>/decklist-status")
+def api_decklist_status(tid):
+  try:
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    prefix = decks_key(tid)
+    submitted = {k[len(prefix):] for k in kv_keys(f"{prefix}*")}
+    return jsonify({
+      "enabled": bool(t.get("decklists")),
+      "locked": _decklist_locked(t),
+      "name": t["name"],
+      "players": [{"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted} for p in t.get("players", [])],
+    })
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/tournaments/<tid>/decklist")
+def api_submit_decklist(tid):
+  try:
+    body = request.get_json(force=True) or {}
+    pid = body.get("player_id")
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    if not t.get("decklists"):
+      return jsonify({"error": "Decklist submission is not enabled for this tournament."}), 400
+    if _decklist_locked(t):
+      return jsonify({"error": "Decklist submission is closed (the tournament has started)."}), 400
+    player = next((p for p in t.get("players", []) if p["id"] == pid), None)
+    if not player:
+      return jsonify({"error": "Unknown player."}), 400
+    if kv_get_json(decks_key(tid, pid)) is not None:
+      return jsonify({"error": "A decklist was already submitted for this player. Ask the organizer to reset it."}), 409
+
+    # Normalise client input to {section: {card_id: qty}}
+    sections: Dict[str, Dict[int, int]] = {}
+    for sec in ("main", "extra", "side"):
+      counts: Dict[int, int] = {}
+      for entry in body.get(sec) or []:
+        cid, qty = int(entry["id"]), int(entry["qty"])
+        if qty < 1 or qty > 3:
+          return jsonify({"error": "Invalid card quantity."}), 400
+        counts[cid] = counts.get(cid, 0) + qty
+      sections[sec] = counts
+
+    main_n, extra_n, side_n = (sum(sections[s].values()) for s in ("main", "extra", "side"))
+    if not 40 <= main_n <= 60:
+      return jsonify({"error": f"Main Deck must have 40-60 cards (has {main_n})."}), 400
+    if extra_n > 15:
+      return jsonify({"error": f"Extra Deck can have at most 15 cards (has {extra_n})."}), 400
+    if side_n > 15:
+      return jsonify({"error": f"Side Deck can have at most 15 cards (has {side_n})."}), 400
+
+    totals: Dict[int, int] = {}
+    for counts in sections.values():
+      for cid, q in counts.items():
+        totals[cid] = totals.get(cid, 0) + q
+
+    # Verify every card against the GOAT card pool and banlist server-side.
+    ids = sorted(totals)
+    cards: Dict[int, dict] = {}
+    for i in range(0, len(ids), 40):
+      chunk = ids[i:i + 40]
+      data = _goat_cardinfo({"id": ",".join(str(x) for x in chunk)})
+      for c in data.get("data", []):
+        cards[c["id"]] = _slim_card(c)
+    for cid, total in totals.items():
+      c = cards.get(cid)
+      if not c:
+        return jsonify({"error": f"Card {cid} is not legal in GOAT format."}), 400
+      limit = GOAT_COPY_LIMITS.get(c["ban"], 3)
+      if total > limit:
+        return jsonify({"error": f"{c['name']}: max {limit} copies allowed (has {total})."}), 400
+    for cid in sections["main"]:
+      if cards[cid]["extra"]:
+        return jsonify({"error": f"{cards[cid]['name']} belongs in the Extra Deck."}), 400
+    for cid in sections["extra"]:
+      if not cards[cid]["extra"]:
+        return jsonify({"error": f"{cards[cid]['name']} cannot go in the Extra Deck."}), 400
+
+    doc = {
+      "player_id": pid,
+      "player": player["name"],
+      "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+      **{sec: [{"id": cid, "name": cards[cid]["name"], "qty": q} for cid, q in counts.items()]
+         for sec, counts in sections.items()},
+    }
+    kv_set_json(decks_key(tid, pid), doc)
+    return jsonify({"ok": True})
+  except (KeyError, TypeError, ValueError):
+    return jsonify({"error": "Malformed decklist."}), 400
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.get("/api/tournaments/<tid>/decklists")
+def api_get_decklists(tid):
+  # Admin-only: decklists are never exposed through any public endpoint.
+  try:
+    if not _admin_ok():
+      return jsonify({"error": "Admin password required."}), 401
+    prefix = decks_key(tid)
+    docs = [d for d in (kv_get_json(k) for k in kv_keys(f"{prefix}*")) if d]
+    docs.sort(key=lambda d: (d.get("player") or "").lower())
+    return jsonify({"decklists": docs})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.delete("/api/tournaments/<tid>/decklist/<pid>")
+def api_reset_decklist(tid, pid):
+  try:
+    import requests as req
+    if not _admin_ok():
+      return jsonify({"error": "Admin password required."}), 401
+    req.post(f"{_kv_url()}/del/{decks_key(tid, pid)}", headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+    return jsonify({"ok": True})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
