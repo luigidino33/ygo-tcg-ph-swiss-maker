@@ -69,8 +69,20 @@ type TournamentInfo = {
   name: string;
   total_rounds: number;
   round: number;
+  format?: string;
+  decklists?: boolean;
   players?: Player[];
   dropped?: string[];
+};
+
+type DeckEntry = { id: number; name: string; qty: number };
+type SubmittedDeck = {
+  player_id: string;
+  player: string;
+  submitted_at: string;
+  main: DeckEntry[];
+  extra: DeckEntry[];
+  side: DeckEntry[];
 };
 
 type LocalPair = {
@@ -139,6 +151,7 @@ export default function Page() {
       });
       if (res.ok) {
         sessionStorage.setItem("admin_authed", "1");
+        sessionStorage.setItem("admin_pw", pwInput);
         setAuthed(true);
       }
     } catch (e) {
@@ -205,6 +218,10 @@ function AdminDashboard() {
   const [name, setName] = useState("BDC Weekly");
   const [rounds, setRounds] = useState(4);
   const [format, setFormat] = useState<"standard" | "retro">("standard");
+  const [collectDecklists, setCollectDecklists] = useState(false);
+  const [showDecklists, setShowDecklists] = useState(false);
+  const [decklists, setDecklists] = useState<SubmittedDeck[]>([]);
+  const [decklistsLoading, setDecklistsLoading] = useState(false);
   const [results, setResults] = useState<Record<string, { outcome: "A" | "B" | "TIE"; score?: [number, number] }>>({});
 
   // Tournament history
@@ -289,7 +306,7 @@ function AdminDashboard() {
       const data = await fetchJSON(`/api/tournaments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, total_rounds: rounds, players: playersList, format }),
+        body: JSON.stringify({ name, total_rounds: rounds, players: playersList, format, decklists: format === "retro" && collectDecklists }),
       });
       localStorage.setItem("tid", data.tournament_id);
       setTid(data.tournament_id);
@@ -568,6 +585,47 @@ function AdminDashboard() {
       () => alert(`Share link copied!\n${url}`),
       () => prompt("Copy this link:", url)
     );
+  };
+
+  const adminHeaders = () => ({ "X-Admin-Password": sessionStorage.getItem("admin_pw") || "" });
+
+  const copyDecklistLink = () => {
+    if (!tid) return;
+    const url = `${window.location.origin}/decklist/${tid}`;
+    navigator.clipboard.writeText(url).then(
+      () => alert(`Decklist submission link copied!\n${url}`),
+      () => prompt("Copy this link:", url)
+    );
+  };
+
+  const loadDecklists = async () => {
+    if (!tid) return;
+    setDecklistsLoading(true);
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/decklists`, { headers: adminHeaders() });
+      setDecklists(res.decklists || []);
+      setShowDecklists(true);
+    } catch (e) {
+      alert(`Failed to load decklists: ${errMsg(e)}\n(Log out and back in if the admin password changed.)`);
+    } finally {
+      setDecklistsLoading(false);
+    }
+  };
+
+  const resetDecklist = async (pid: string, playerName: string) => {
+    if (!tid || !confirm(`Reset ${playerName}'s decklist? They will be able to submit a new one.`)) return;
+    try {
+      await fetchJSON(`/api/tournaments/${tid}/decklist/${pid}`, { method: "DELETE", headers: adminHeaders() });
+      setDecklists((d) => d.filter((x) => x.player_id !== pid));
+    } catch (e) {
+      alert(`Failed to reset decklist: ${errMsg(e)}`);
+    }
+  };
+
+  const decklistText = (d: SubmittedDeck) => {
+    const fmt = (title: string, list: DeckEntry[]) =>
+      list.length ? `${title}\n${list.map((c) => `${c.qty}x ${c.name}`).join("\n")}\n` : "";
+    return `${d.player}\n\n${fmt("Main Deck", d.main)}\n${fmt("Extra Deck", d.extra)}\n${fmt("Side Deck", d.side)}`.trim();
   };
 
   const exportStandingsImage = () => {
@@ -849,6 +907,17 @@ function AdminDashboard() {
             <p style={{ color: '#90caf9', fontSize: 11, marginTop: 4 }}>
               {format === "retro" ? "Retro: Ties = Draw (1pt each)" : "Standard: Ties = Double Loss (0pt each)"}
             </p>
+            {format === "retro" && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, textTransform: 'none', letterSpacing: 0, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={collectDecklists}
+                  onChange={(e) => setCollectDecklists(e.target.checked)}
+                  style={{ width: 'auto', margin: 0 }}
+                />
+                Collect GOAT decklists (players submit via a link; only you can view them)
+              </label>
+            )}
           </div>
           <div>
             <label>Players (one per line)</label>
@@ -944,6 +1013,16 @@ function AdminDashboard() {
             <button onClick={copyShareLink} className="secondary">
               🔗 Share Link
             </button>
+            {info?.decklists && (
+              <>
+                <button onClick={copyDecklistLink} className="secondary">
+                  🃏 Decklist Link
+                </button>
+                <button onClick={loadDecklists} disabled={decklistsLoading} className="secondary">
+                  📋 View Decklists
+                </button>
+              </>
+            )}
             <button onClick={exportStandingsImage} disabled={!standings.length} className="secondary">
               📸 Export Standings
             </button>
@@ -1430,6 +1509,64 @@ function AdminDashboard() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {showDecklists && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2>📋 GOAT Decklists ({decklists.length}/{players.length})</h2>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="secondary" onClick={loadDecklists} disabled={decklistsLoading}>Refresh</button>
+                <button className="secondary" onClick={() => setShowDecklists(false)}>Close</button>
+              </div>
+            </div>
+            {players.filter((p) => !decklists.some((d) => d.player_id === p.id)).length > 0 && (
+              <p style={{ fontSize: 12, color: '#ffcc80', marginBottom: 12 }}>
+                Not yet submitted: {players.filter((p) => !decklists.some((d) => d.player_id === p.id)).map((p) => p.name).join(", ")}
+              </p>
+            )}
+            {decklists.length === 0 && <p style={{ color: '#90caf9' }}>No decklists submitted yet.</p>}
+            {decklists.map((d) => (
+              <details key={d.player_id} style={{ marginBottom: 8, border: '2px solid #5c6bc0', borderRadius: 8, padding: 10 }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>
+                  {d.player}{" "}
+                  <span style={{ fontWeight: 'normal', fontSize: 12, color: '#90caf9' }}>
+                    {d.main.reduce((a, c) => a + c.qty, 0)} / {d.extra.reduce((a, c) => a + c.qty, 0)} / {d.side.reduce((a, c) => a + c.qty, 0)} (Main/Extra/Side)
+                  </span>
+                </summary>
+                <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
+                  <button
+                    className="secondary"
+                    style={{ padding: '6px 12px', fontSize: 11 }}
+                    onClick={() => navigator.clipboard.writeText(decklistText(d)).then(() => alert("Decklist copied"))}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    className="secondary"
+                    style={{ padding: '6px 12px', fontSize: 11, color: '#ef5350' }}
+                    onClick={() => resetDecklist(d.player_id, d.player)}
+                  >
+                    Reset
+                  </button>
+                </div>
+                {([["Main Deck", d.main], ["Extra Deck", d.extra], ["Side Deck", d.side]] as [string, DeckEntry[]][]).map(([title, list]) =>
+                  list.length ? (
+                    <div key={title} style={{ marginBottom: 8 }}>
+                      <div style={{ fontWeight: 'bold', fontSize: 12, color: '#90caf9' }}>{title}</div>
+                      <div style={{ fontSize: 13 }}>
+                        {list.map((c) => (
+                          <div key={c.id}>{c.qty}x {c.name}</div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null
+                )}
+              </details>
+            ))}
           </div>
         </div>
       )}
