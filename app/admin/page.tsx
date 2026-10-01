@@ -181,7 +181,7 @@ export default function Page() {
             {pwLoading ? "Verifying..." : "Login"}
           </button>
           <div style={{ textAlign: "center", marginTop: 12 }}>
-            <a href="/" style={{ color: "#d8c28a", fontSize: 13 }}>Back to Home</a>
+            <a href="/" style={{ color: "#86b4e6", fontSize: 13 }}>Back to Home</a>
           </div>
         </div>
       </div>
@@ -648,19 +648,19 @@ function AdminDashboard() {
     // Background
     const bg = ctx.createLinearGradient(0, 0, W, H);
     bg.addColorStop(0, "#060a1a");
-    bg.addColorStop(0.5, "#0e1638");
-    bg.addColorStop(1, "#16214a");
+    bg.addColorStop(0.5, "#06244e");
+    bg.addColorStop(1, "#0c3a74");
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
     // Title
     let y = padTop;
-    ctx.fillStyle = "#f7ecc6";
+    ctx.fillStyle = "#f2f9ff";
     ctx.font = "bold 28px Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(info.name || "Tournament", W / 2, y + 30);
 
-    ctx.fillStyle = "#d8c28a";
+    ctx.fillStyle = "#86b4e6";
     ctx.font = "14px Segoe UI, sans-serif";
     ctx.fillText(
       `Round ${info.round} of ${info.total_rounds}  \u2022  ${info.players?.length || 0} Duelists`,
@@ -682,8 +682,8 @@ function AdminDashboard() {
 
     // Header bar
     const hdrGrad = ctx.createLinearGradient(20, y, 20, y + tableHeaderH);
-    hdrGrad.addColorStop(0, "#d6b25e");
-    hdrGrad.addColorStop(1, "#d8c28a");
+    hdrGrad.addColorStop(0, "#3aa0ff");
+    hdrGrad.addColorStop(1, "#86b4e6");
     ctx.fillStyle = hdrGrad;
     ctx.beginPath();
     ctx.roundRect(20, y, W - 40, tableHeaderH, 6);
@@ -703,7 +703,7 @@ function AdminDashboard() {
     for (const r of standings) {
       // Alternating row bg
       if (r.rank % 2 === 0) {
-        ctx.fillStyle = "rgba(214, 178, 94, 0.07)";
+        ctx.fillStyle = "rgba(58, 160, 255, 0.07)";
         ctx.fillRect(20, y, W - 40, rowH);
       }
 
@@ -746,7 +746,7 @@ function AdminDashboard() {
       ctx.fillText(deck || "-", cols[6].x + cols[6].w / 2, y + 23);
 
       ctx.font = "11px Segoe UI, monospace";
-      ctx.fillStyle = "#d8c28a";
+      ctx.fillStyle = "#86b4e6";
       ctx.fillText(r.kts, cols[7].x + cols[7].w / 2, y + 23);
 
       ctx.globalAlpha = 1.0;
@@ -878,7 +878,7 @@ function AdminDashboard() {
               const suggested = suggestRounds(count);
               if (suggested !== null) {
                 return (
-                  <p style={{ color: '#d8c28a', fontSize: 12, marginTop: 4 }}>
+                  <p style={{ color: '#86b4e6', fontSize: 12, marginTop: 4 }}>
                     Auto-suggested: {suggested} rounds for {count} players (per KDE-US policy)
                   </p>
                 );
@@ -904,7 +904,7 @@ function AdminDashboard() {
                 Retro
               </button>
             </div>
-            <p style={{ color: '#d8c28a', fontSize: 11, marginTop: 4 }}>
+            <p style={{ color: '#86b4e6', fontSize: 11, marginTop: 4 }}>
               {format === "retro" ? "Retro: Ties = Draw (1pt each)" : "Standard: Ties = Double Loss (0pt each)"}
             </p>
             {format === "retro" && (
@@ -951,17 +951,17 @@ function AdminDashboard() {
                     alignItems: "center",
                     gap: 12,
                     padding: 12,
-                    background: "rgba(10, 16, 40, 0.65)",
-                    border: "2px solid #8a7440",
+                    background: "rgba(8, 40, 86, 0.8)",
+                    border: "2px solid #2a6cb4",
                     borderRadius: 8,
                   }}
                 >
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: "bold", fontSize: 14 }}>{h.name}</div>
-                    <div style={{ fontSize: 12, color: "#d8c28a" }}>
+                    <div style={{ fontSize: 12, color: "#86b4e6" }}>
                       {h.player_count} players &bull; {h.created_at ? new Date(h.created_at).toLocaleDateString() : ""}
                     </div>
-                    <div style={{ fontSize: 11, color: "#d6b25e", fontFamily: "monospace" }}>
+                    <div style={{ fontSize: 11, color: "#3aa0ff", fontFamily: "monospace" }}>
                       ID: {h.id}
                     </div>
                   </div>
@@ -1003,7 +1003,7 @@ function AdminDashboard() {
                 <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
                   Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists • {(info as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
                 </p>
-                <p style={{ color: '#d8c28a', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
+                <p style={{ color: '#86b4e6', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
                   Tournament ID: {info.id}
                 </p>
               </>
@@ -1133,15 +1133,15 @@ function AdminDashboard() {
                       padding: '12px',
                       background: isCompleted
                         ? 'linear-gradient(135deg, rgba(56, 142, 60, 0.15), rgba(76, 175, 80, 0.08))'
-                        : 'rgba(10, 16, 40, 0.65)',
-                      border: `2px solid ${isCompleted ? '#81c784' : '#8a7440'}`,
+                        : 'rgba(8, 40, 86, 0.8)',
+                      border: `2px solid ${isCompleted ? '#81c784' : '#2a6cb4'}`,
                       borderRadius: 8,
                       transition: 'all 0.3s ease'
                     }}
                   >
                     {/* Table Number */}
                     <div style={{
-                      background: 'linear-gradient(135deg, #d6b25e, #d8c28a)',
+                      background: 'linear-gradient(135deg, #3aa0ff, #86b4e6)',
                       color: '#060a1a',
                       fontWeight: 900,
                       fontSize: 16,
@@ -1198,15 +1198,15 @@ function AdminDashboard() {
                         </div>
                       ) : (
                         <div style={{
-                          background: 'rgba(214, 178, 94, 0.2)',
-                          color: '#d8c28a',
+                          background: 'rgba(58, 160, 255, 0.2)',
+                          color: '#86b4e6',
                           padding: '4px 10px',
                           borderRadius: 6,
                           fontSize: 11,
                           fontWeight: 'bold',
                           textTransform: 'uppercase',
                           letterSpacing: 0.5,
-                          border: '1px solid rgba(214, 178, 94, 0.3)'
+                          border: '1px solid rgba(58, 160, 255, 0.3)'
                         }}>
                           LIVE
                         </div>
@@ -1398,7 +1398,7 @@ function AdminDashboard() {
                             setDeckInput(p?.deck || "");
                             setEditingDeckId(r.player_id);
                           }}
-                          style={{ cursor: 'pointer', fontSize: 12, color: players.find(p => p.id === r.player_id)?.deck ? '#e8eaf6' : '#d6b25e', fontStyle: players.find(p => p.id === r.player_id)?.deck ? 'normal' : 'italic', display: 'block', marginBottom: 2 }}
+                          style={{ cursor: 'pointer', fontSize: 12, color: players.find(p => p.id === r.player_id)?.deck ? '#e8eaf6' : '#3aa0ff', fontStyle: players.find(p => p.id === r.player_id)?.deck ? 'normal' : 'italic', display: 'block', marginBottom: 2 }}
                           title="Click to edit deck"
                         >
                           {players.find((p) => p.id === r.player_id)?.deck || "Set deck"}
@@ -1411,7 +1411,7 @@ function AdminDashboard() {
                         return (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
                             {archs.map(a => (
-                              <span key={a} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'rgba(214, 178, 94, 0.2)', border: '1px solid #8a7440', borderRadius: 4, padding: '1px 6px', fontSize: 10, color: '#d8c28a' }}>
+                              <span key={a} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'rgba(58, 160, 255, 0.2)', border: '1px solid #2a6cb4', borderRadius: 4, padding: '1px 6px', fontSize: 10, color: '#86b4e6' }}>
                                 {a}
                                 <span
                                   onClick={() => removeArchetype(r.player_id, a)}
@@ -1454,7 +1454,7 @@ function AdminDashboard() {
                                     autoFocus
                                   />
                                   {archSuggestions.length > 0 && (
-                                    <div style={{ position: 'absolute', top: '100%', left: 0, background: '#0e1638', border: '1px solid #8a7440', borderRadius: 4, zIndex: 50, maxHeight: 120, overflowY: 'auto', width: 160 }}>
+                                    <div style={{ position: 'absolute', top: '100%', left: 0, background: '#06244e', border: '1px solid #2a6cb4', borderRadius: 4, zIndex: 50, maxHeight: 120, overflowY: 'auto', width: 160 }}>
                                       {archSuggestions.map(s => (
                                         <div
                                           key={s}
@@ -1464,8 +1464,8 @@ function AdminDashboard() {
                                             setArchSearchInput("");
                                             setArchSuggestions([]);
                                           }}
-                                          style={{ padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderBottom: '1px solid rgba(138, 116, 64, 0.3)' }}
-                                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(214, 178, 94, 0.2)')}
+                                          style={{ padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderBottom: '1px solid rgba(42, 108, 180, 0.3)' }}
+                                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(58, 160, 255, 0.2)')}
                                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                                         >
                                           {s}
@@ -1477,7 +1477,7 @@ function AdminDashboard() {
                               ) : (
                                 <span
                                   onClick={() => { setAddingArchId(r.player_id); setArchSearchInput(""); setArchSuggestions([]); }}
-                                  style={{ cursor: 'pointer', fontSize: 10, color: '#d6b25e', border: '1px dashed #8a7440', borderRadius: 4, padding: '1px 5px' }}
+                                  style={{ cursor: 'pointer', fontSize: 10, color: '#3aa0ff', border: '1px dashed #2a6cb4', borderRadius: 4, padding: '1px 5px' }}
                                   title="Add archetype tag"
                                 >+</span>
                               )
@@ -1528,12 +1528,12 @@ function AdminDashboard() {
                 Not yet submitted: {players.filter((p) => !decklists.some((d) => d.player_id === p.id)).map((p) => p.name).join(", ")}
               </p>
             )}
-            {decklists.length === 0 && <p style={{ color: '#d8c28a' }}>No decklists submitted yet.</p>}
+            {decklists.length === 0 && <p style={{ color: '#86b4e6' }}>No decklists submitted yet.</p>}
             {decklists.map((d) => (
-              <details key={d.player_id} style={{ marginBottom: 8, border: '2px solid #8a7440', borderRadius: 8, padding: 10 }}>
+              <details key={d.player_id} style={{ marginBottom: 8, border: '2px solid #2a6cb4', borderRadius: 8, padding: 10 }}>
                 <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>
                   {d.player}{" "}
-                  <span style={{ fontWeight: 'normal', fontSize: 12, color: '#d8c28a' }}>
+                  <span style={{ fontWeight: 'normal', fontSize: 12, color: '#86b4e6' }}>
                     {d.main.reduce((a, c) => a + c.qty, 0)} / {d.extra.reduce((a, c) => a + c.qty, 0)} / {d.side.reduce((a, c) => a + c.qty, 0)} (Main/Extra/Side)
                   </span>
                 </summary>
@@ -1556,7 +1556,7 @@ function AdminDashboard() {
                 {([["Main Deck", d.main], ["Extra Deck", d.extra], ["Side Deck", d.side]] as [string, DeckEntry[]][]).map(([title, list]) =>
                   list.length ? (
                     <div key={title} style={{ marginBottom: 8 }}>
-                      <div style={{ fontWeight: 'bold', fontSize: 12, color: '#d8c28a' }}>{title}</div>
+                      <div style={{ fontWeight: 'bold', fontSize: 12, color: '#86b4e6' }}>{title}</div>
                       <div style={{ fontSize: 13 }}>
                         {list.map((c) => (
                           <div key={c.id}>{c.qty}x {c.name}</div>
@@ -1619,7 +1619,7 @@ function AdminDashboard() {
                         color: h.result === 'Win' || h.result === 'BYE (Win)' ? '#81c784'
                           : h.result === 'Loss' ? '#ef5350'
                           : (h.result === 'Double Loss' || h.result === 'Draw') ? '#ff9800'
-                          : '#d8c28a'
+                          : '#86b4e6'
                       }}>
                         {h.result}
                       </td>
@@ -1660,12 +1660,12 @@ function AdminDashboard() {
                   ].map((s) => (
                     <div key={s.label} style={{
                       background: 'rgba(26, 35, 126, 0.6)',
-                      border: '1px solid #8a7440',
+                      border: '1px solid #2a6cb4',
                       borderRadius: 8,
                       padding: 12,
                       textAlign: 'center',
                     }}>
-                      <div style={{ fontSize: 11, color: '#d8c28a', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                      <div style={{ fontSize: 11, color: '#86b4e6', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
                       <div style={{ fontSize: 22, fontWeight: 'bold', marginTop: 4 }}>{s.value}</div>
                     </div>
                   ))}
@@ -1714,7 +1714,7 @@ function AdminDashboard() {
               <>
                 {/* Pie chart with archetype images */}
                 {(() => {
-                  const PIE_COLORS = ['#d6b25e','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#d8c28a'];
+                  const PIE_COLORS = ['#3aa0ff','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#86b4e6'];
                   const total = metagame.reduce((s, m) => s + m.count, 0);
                   type PieSlice = { label: string; count: number; color: string; imageUrl?: string | null };
                   const major: PieSlice[] = [];
@@ -1777,7 +1777,7 @@ function AdminDashboard() {
                             </g>
                           );
                         })}
-                        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#d8c28a" fontWeight="bold">{total}</text>
+                        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#86b4e6" fontWeight="bold">{total}</text>
                         <text x={cx} y={cy + 10} textAnchor="middle" fontSize={9} fill="#546e7a">entries</text>
                       </svg>
                     </div>
@@ -1802,8 +1802,8 @@ function AdminDashboard() {
                     </thead>
                     <tbody>
                       {metagame.map((m, i) => {
-                        const COLORS = ['#d6b25e','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#d8c28a'];
-                        const tierColor = m.tier === 'Tier 1' ? '#81c784' : m.tier === 'Tier 2' ? '#ffb74d' : '#d8c28a';
+                        const COLORS = ['#3aa0ff','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#86b4e6'];
+                        const tierColor = m.tier === 'Tier 1' ? '#81c784' : m.tier === 'Tier 2' ? '#ffb74d' : '#86b4e6';
                         const imgUrl = archImages[m.archetype];
                         return (
                           <tr key={m.archetype}>
@@ -1830,7 +1830,7 @@ function AdminDashboard() {
                             <td style={{ textAlign: 'center', fontWeight: 'bold', color: m.conversion >= 30 ? '#81c784' : m.conversion >= 15 ? '#ffb74d' : '#ef5350' }}>
                               {m.conversion}%
                             </td>
-                            <td style={{ textAlign: 'center', color: '#d8c28a' }}>{m.avg_placement}</td>
+                            <td style={{ textAlign: 'center', color: '#86b4e6' }}>{m.avg_placement}</td>
                           </tr>
                         );
                       })}

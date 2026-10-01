@@ -1,27 +1,35 @@
-"use client";
-
 export default function HomePage() {
-  return (
-    <div style={{ maxWidth: 500, margin: "0 auto", paddingTop: 80 }}>
-      <div className="card" style={{ textAlign: "center" }}>
-        <h1>YGO TCG PH Tournament App</h1>
-        <p style={{ color: "#cbd5e1", fontSize: 14, marginBottom: 32 }}>
-          KTS-powered Swiss pairings with double loss support
-        </p>
+  const links = [
+    { href: "/players?tab=history", icon: "📜", label: "Tournament Results" },
+    { href: "/players?tab=leaderboard", icon: "👑", label: "Ranking" },
+    { href: "/players?tab=metagame", icon: "📊", label: "Metagame" },
+  ];
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <a href="/admin" style={{ textDecoration: "none" }}>
-            <button style={{ width: "100%", fontSize: 16, padding: "16px 24px" }}>
-              🔒 Admin Panel
-            </button>
-          </a>
-          <a href="/players" style={{ textDecoration: "none" }}>
-            <button className="secondary" style={{ width: "100%", fontSize: 16, padding: "16px 24px" }}>
-              👥 Player View
-            </button>
-          </a>
-        </div>
+  return (
+    <main className="nv-home">
+      <h1 style={{ marginTop: 8 }}>Tournament App</h1>
+      <p className="nv-note">KTS-powered Swiss pairings for the YGO TCG PH community.</p>
+
+      <div className="nv-hud-row">
+        <a href="/admin" className="nv-hud">
+          <span className="nv-hud-icon">🛡️</span>
+          Organizer
+        </a>
+        <a href="/players" className="nv-hud big">
+          <span className="nv-hud-icon">🃏</span>
+          Player View
+        </a>
       </div>
-    </div>
+
+      <nav className="nv-list">
+        {links.map((l) => (
+          <a key={l.href} href={l.href} className="nv-pill">
+            <span className="nv-pill-icon">{l.icon}</span>
+            <span className="nv-pill-label">{l.label}</span>
+            <span className="nv-pill-chev">›</span>
+          </a>
+        ))}
+      </nav>
+    </main>
   );
 }

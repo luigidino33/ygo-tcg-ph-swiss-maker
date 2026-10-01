@@ -102,7 +102,7 @@ function ArchetypePieChart({ metagame, archImages }: { metagame: MetagameEntry[]
           );
         })}
         {/* Center text */}
-        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#d8c28a" fontWeight="bold">{total}</text>
+        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill="#86b4e6" fontWeight="bold">{total}</text>
         <text x={cx} y={cy + 10} textAnchor="middle" fontSize={9} fill="#546e7a">entries</text>
       </svg>
     </div>
@@ -148,12 +148,12 @@ const fetchJSON = async (url: string) => {
   return data;
 };
 
-const PIE_COLORS = ['#d6b25e','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#d8c28a'];
+const PIE_COLORS = ['#3aa0ff','#81c784','#ff9800','#ef5350','#ce93d8','#4dd0e1','#ffb74d','#a5d6a7','#f48fb1','#86b4e6'];
 
 // Sort arrow indicator
 function SortArrow({ column, sortKey, sortDir }: { column: string; sortKey: string; sortDir: "asc" | "desc" }) {
   if (column !== sortKey) return <span style={{ color: "#546e7a", marginLeft: 2 }}>↕</span>;
-  return <span style={{ color: "#d6b25e", marginLeft: 2 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
+  return <span style={{ color: "#3aa0ff", marginLeft: 2 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
 }
 
 export default function PlayersPage() {
@@ -164,6 +164,11 @@ export default function PlayersPage() {
   const [metagame, setMetagame] = useState<MetagameEntry[]>([]);
   const [archImages, setArchImages] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("tab");
+    if (q === "history" || q === "leaderboard" || q === "metagame") setTab(q);
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -199,23 +204,13 @@ export default function PlayersPage() {
 
   return (
     <main style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-          <h1>YGO TCG PH Tournament App</h1>
-          <a href="/" style={{ textDecoration: "none" }}>
-            <button className="secondary" style={{ fontSize: 12 }}>Home</button>
-          </a>
-        </div>
-      </div>
-
       {/* Tab bar */}
-      <div className="card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div className="nv-tabs">
         {(["history", "leaderboard", "metagame"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={tab === t ? "" : "secondary"}
-            style={{ flex: 1, minWidth: 0 }}
+            className={tab === t ? "active" : ""}
           >
             {t === "history" && "📜 Tournaments"}
             {t === "leaderboard" && "🏆 Leaderboard"}
@@ -226,7 +221,7 @@ export default function PlayersPage() {
 
       {/* Format filter */}
       <div className="card" style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ color: "#d8c28a", fontSize: 12, fontWeight: "bold", marginRight: 4 }}>FORMAT:</span>
+        <span style={{ color: "#86b4e6", fontSize: 12, fontWeight: "bold", marginRight: 4 }}>FORMAT:</span>
         {(["standard", "retro"] as const).map((f) => (
           <button
             key={f}
@@ -268,18 +263,18 @@ function HistoryTab({ history }: { history: TournamentHistoryEntry[] }) {
               alignItems: "center",
               gap: 12,
               padding: 12,
-              background: "rgba(10, 16, 40, 0.65)",
-              border: "2px solid #8a7440",
+              background: "rgba(8, 40, 86, 0.8)",
+              border: "2px solid #2a6cb4",
               borderRadius: 8,
             }}
           >
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: "bold", fontSize: 14 }}>{h.name}</div>
-              <div style={{ fontSize: 12, color: "#d8c28a" }}>
+              <div style={{ fontSize: 12, color: "#86b4e6" }}>
                 {h.player_count} players
                 {h.created_at ? ` \u2022 ${new Date(h.created_at).toLocaleDateString()}` : ""}
                 {" \u2022 "}
-                <span style={{ color: (h as any).format === "retro" ? "#ce93d8" : "#d6b25e" }}>
+                <span style={{ color: (h as any).format === "retro" ? "#ce93d8" : "#3aa0ff" }}>
                   {(h as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
                 </span>
               </div>
@@ -478,7 +473,7 @@ function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; arch
           </thead>
           <tbody>
             {sorted.map((m, i) => {
-              const tierColor = m.tier === "Tier 1" ? "#81c784" : m.tier === "Tier 2" ? "#ffb74d" : "#d8c28a";
+              const tierColor = m.tier === "Tier 1" ? "#81c784" : m.tier === "Tier 2" ? "#ffb74d" : "#86b4e6";
               const imgUrl = archImages[m.archetype];
               return (
                 <tr key={m.archetype}>
@@ -505,7 +500,7 @@ function MetagameTab({ metagame, archImages }: { metagame: MetagameEntry[]; arch
                   <td style={{ textAlign: "center", fontWeight: "bold", color: m.conversion >= 30 ? "#81c784" : m.conversion >= 15 ? "#ffb74d" : "#ef5350" }}>
                     {m.conversion}%
                   </td>
-                  <td style={{ textAlign: "center", color: "#d8c28a" }}>{m.avg_placement}</td>
+                  <td style={{ textAlign: "center", color: "#86b4e6" }}>{m.avg_placement}</td>
                 </tr>
               );
             })}
