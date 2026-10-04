@@ -158,7 +158,7 @@ class Node:
   id: str
   name: str
   wins: List[object] = field(default_factory=list)    # Node or "BYE"
-  losses: List[object] = field(default_factory=list)  # Node
+  losses: List[object] = field(default_factory=list)  # Node or "FORFEIT" (round missed by a late entrant)
   draws: List[object] = field(default_factory=list)   # Node (retro format)
   lost_rounds: List[int] = field(default_factory=list)
   game_wins: int = 0    # total individual games won (retro)
@@ -221,12 +221,31 @@ def rebuild_graph(t: dict) -> Dict[str, Node]:
       if is_retro and score and len(score) == 2:
         a.game_wins += score[0]; a.game_losses += score[1]
         b.game_wins += score[1]; b.game_losses += score[0]
+  for pid, n in missed_rounds(t):
+    node = players[pid]
+    node.losses.append("FORFEIT"); node.lost_rounds.append(n)
+    if is_retro:
+      node.game_losses += 2  # mirrors BYE counting as 2-0
   return players
+
+def missed_rounds(t: dict) -> list[tuple[str, int]]:
+  # (player_id, round) for each round a late entrant was not paired in, up to the
+  # round that existed when they joined. Derived, so Edit Pairings / Revert stay consistent.
+  out = []
+  late = [p for p in t.get("players", []) if p.get("joined_round")]
+  if not late:
+    return out
+  for rnd in t.get("rounds", []):
+    present = {m["a"] for m in rnd["matches"]} | {m["b"] for m in rnd["matches"] if m.get("b")}
+    for p in late:
+      if rnd["n"] <= p["joined_round"] and p["id"] not in present:
+        out.append((p["id"], rnd["n"]))
+  return out
 
 def opp_win_pct(p: Node) -> float:
   tot, num = 0.0, 0
   for opp in p.wins + p.losses + p.draws:
-    if opp == "BYE":
+    if not isinstance(opp, Node):
       continue
     tot += opp.match_win_pct()
     num += 1
@@ -243,7 +262,7 @@ def compute_standings(t: dict):
     bbb = max(0, int(round(opp_win_pct(p), 3) * 1000))
     acc, nopp = 0.0, 0
     for opp in p.wins + p.losses + p.draws:
-      if opp == "BYE":
+      if not isinstance(opp, Node):
         continue
       acc += opp_win_pct(opp); nopp += 1
     ccc = max(0, int(round((acc / nopp) if nopp else 0.0, 3) * 1000))
@@ -319,6 +338,10 @@ def player_match_history(t: dict, player_id: str) -> list[dict]:
         "score": score_str,
         "match_id": m["id"]
       })
+  for pid, n in missed_rounds(t):
+    if pid == player_id:
+      history.append({"round": n, "opponent": "—", "opponent_deck": "", "result": "Loss (late entry)", "score": "0-2" if is_retro else "", "match_id": ""})
+  history.sort(key=lambda h: h["round"])
   return history
 
 def current_round_number(t: dict) -> int:
@@ -882,6 +905,38 @@ def api_restart_round(tid):
     kv_set_json(tid_key(tid), t)
 
     return jsonify({"ok": True, "round": last["n"], "pairs": pairs_for_ui(t)})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/tournaments/<tid>/add-player")
+def api_add_player(tid):
+  # Late entry: included from the next pairing onward (pair_next uses all non-dropped
+  # players); rounds already paired without them count as losses (see missed_rounds).
+  try:
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+      return jsonify({"error": "Player name is required."}), 400
+
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    if any(p["name"].strip().lower() == name.lower() for p in t.get("players", [])):
+      return jsonify({"error": f"A player named '{name}' is already in this tournament."}), 400
+
+    player = {"id": new_id("p"), "name": name}
+    if current_round_number(t) > 0:
+      player["joined_round"] = current_round_number(t)
+    t["players"].append(player)
+    kv_set_json(tid_key(tid), t)
+
+    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+    for e in idx:
+      if e.get("id") == tid:
+        e["player_count"] = len(t["players"])
+    kv_set_json(TOURNAMENT_INDEX_KEY, idx)
+
+    return jsonify({"ok": True, "player": player, "standings": compute_standings(t)})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
