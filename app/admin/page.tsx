@@ -219,6 +219,8 @@ function AdminDashboard() {
   const [rounds, setRounds] = useState(4);
   const [format, setFormat] = useState<"standard" | "retro">("standard");
   const [collectDecklists, setCollectDecklists] = useState(false);
+  const [newPlayerName, setNewPlayerName] = useState("");
+  const [addingPlayer, setAddingPlayer] = useState(false);
   const [showDecklists, setShowDecklists] = useState(false);
   const [decklists, setDecklists] = useState<SubmittedDeck[]>([]);
   const [decklistsLoading, setDecklistsLoading] = useState(false);
@@ -460,6 +462,28 @@ function AdminDashboard() {
     } catch (e) {
       console.error(e);
       alert(`Revert failed: ${errMsg(e)}`);
+    }
+  };
+
+  const addPlayer = async () => {
+    const playerName = newPlayerName.trim();
+    if (!tid || !playerName) return;
+    setAddingPlayer(true);
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/add-player`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: playerName }),
+      });
+      setStandings(res.standings || []);
+      setNewPlayerName("");
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+    } catch (e) {
+      alert(`Failed to add player: ${errMsg(e)}`);
+    } finally {
+      setAddingPlayer(false);
     }
   };
 
@@ -1349,6 +1373,24 @@ function AdminDashboard() {
       {standings.length > 0 && (
         <div className="card">
           <h2>🏆 Current Standings</h2>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+            <input
+              type="text"
+              value={newPlayerName}
+              onChange={(e) => setNewPlayerName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addPlayer(); }}
+              placeholder="Late entry: player name"
+              style={{ flex: 1, minWidth: 180, maxWidth: 320, marginBottom: 0 }}
+            />
+            <button onClick={addPlayer} disabled={addingPlayer || !newPlayerName.trim()}>
+              {addingPlayer ? "Adding..." : "➕ Add Player"}
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: '#86b4e6', marginBottom: 14 }}>
+            {pairs.length > 0
+              ? `Rounds 1-${info?.round} count as losses for a late player, who then joins from the next round. To play them in Round ${info?.round} instead, use Edit Pairings before any result is entered.`
+              : (info?.round ? `Rounds 1-${info.round} count as losses for a late player, who is included in the next pairing.` : "Round 1 has not started, so a new player joins with a clean record.")}
+          </p>
           <div style={{ overflowX: 'auto' }}>
             <table>
               <thead>
