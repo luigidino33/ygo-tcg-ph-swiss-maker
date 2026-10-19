@@ -21,7 +21,7 @@ type Section = "main" | "extra" | "side";
 type Counts = Record<number, number>;
 type Deck = Record<Section, Counts>;
 type RosterPlayer = { id: string; name: string; submitted: boolean };
-type Status = { enabled: boolean; locked: boolean; name: string; players: RosterPlayer[] };
+type Status = { enabled: boolean; registration: boolean; locked: boolean; name: string; players: RosterPlayer[] };
 
 const EMPTY_DECK: Deck = { main: {}, extra: {}, side: {} };
 const LIMITS: Record<Section, { min: number; max: number }> = {
@@ -72,6 +72,9 @@ export default function DecklistPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loadError, setLoadError] = useState("");
   const [playerId, setPlayerId] = useState("");
+  const [regName, setRegName] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [regError, setRegError] = useState("");
   const [started, setStarted] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -271,7 +274,9 @@ export default function DecklistPage() {
           <p>
             {!status.enabled
               ? "Decklist submission isn't enabled for this tournament."
-              : "Decklist submission is closed because the tournament has started."}
+              : status.registration
+                ? "Registration and decklist submission are closed because the tournament has started."
+                : "Decklist submission is closed because the tournament has started."}
           </p>
         </div>
       </div>
@@ -297,29 +302,80 @@ export default function DecklistPage() {
 
   if (!started) {
     const open = status.players.filter((p) => !p.submitted);
+
+    const register = async () => {
+      setRegistering(true);
+      setRegError("");
+      try {
+        const res = await api(`/api/tournaments/${tid}/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: regName }),
+        });
+        setStatus({ ...status, players: [...status.players, { ...res.player, submitted: false }] });
+        setPlayerId(res.player.id);
+        setStarted(true);
+      } catch (e: any) {
+        setRegError(e.message || "Registration failed");
+      } finally {
+        setRegistering(false);
+      }
+    };
+
     return (
-      <div style={{ maxWidth: 520, margin: "0 auto", paddingTop: 60 }}>
+      <div style={{ maxWidth: 520, margin: "0 auto", paddingTop: 24 }}>
         <div className="card">
-          <h1>GOAT Decklist</h1>
+          <h1>{status.registration ? "Register & Submit Deck" : "GOAT Decklist"}</h1>
           <p style={{ marginBottom: 16, color: "#cbd5e1" }}>{status.name}</p>
-          <label>Select your name</label>
-          <select value={playerId} onChange={(e) => setPlayerId(e.target.value)}>
-            <option value="">-- choose --</option>
-            {status.players.map((p) => (
-              <option key={p.id} value={p.id} disabled={p.submitted}>
-                {p.name}
-                {p.submitted ? " (submitted)" : ""}
-              </option>
-            ))}
-          </select>
-          {open.length === 0 && (
-            <p style={{ color: "#86b4e6", fontSize: 13, marginBottom: 12 }}>Everyone has already submitted a decklist.</p>
+
+          {status.registration && (
+            <>
+              <label>New player? Enter your name</label>
+              <input
+                type="text"
+                value={regName}
+                maxLength={40}
+                onChange={(e) => setRegName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && regName.trim()) register(); }}
+                placeholder="Your name as it should appear in standings"
+                style={{ marginBottom: 10 }}
+              />
+              {regError && <p style={{ color: "#ff8a80", fontSize: 13, marginBottom: 10 }}>{regError}</p>}
+              <button disabled={registering || !regName.trim()} onClick={register} style={{ width: "100%" }}>
+                {registering ? "Registering..." : "Register & Build Deck"}
+              </button>
+            </>
           )}
-          <button disabled={!playerId} onClick={() => setStarted(true)} style={{ width: "100%" }}>
-            Build Deck
-          </button>
-          <p style={{ color: "#86b4e6", fontSize: 12, marginTop: 12 }}>
+
+          {status.players.length > 0 && (
+            <>
+              {status.registration && (
+                <p style={{ textAlign: "center", color: "#86b4e6", fontSize: 12, margin: "18px 0 12px" }}>
+                  Already registered? Pick your name below.
+                </p>
+              )}
+              <label>Select your name</label>
+              <select value={playerId} onChange={(e) => setPlayerId(e.target.value)}>
+                <option value="">-- choose --</option>
+                {status.players.map((p) => (
+                  <option key={p.id} value={p.id} disabled={p.submitted}>
+                    {p.name}
+                    {p.submitted ? " (submitted)" : ""}
+                  </option>
+                ))}
+              </select>
+              {open.length === 0 && (
+                <p style={{ color: "#86b4e6", fontSize: 13, marginBottom: 12 }}>Everyone listed has already submitted a decklist.</p>
+              )}
+              <button className="secondary" disabled={!playerId} onClick={() => setStarted(true)} style={{ width: "100%" }}>
+                Build Deck
+              </button>
+            </>
+          )}
+
+          <p style={{ color: "#86b4e6", fontSize: 12, marginTop: 14 }}>
             Cards, GOAT banlist and limits are enforced. Once submitted, only the organizer can see or reset your list.
+            {status.registration && " Registration closes when Round 1 is paired."}
           </p>
         </div>
       </div>

@@ -71,6 +71,7 @@ type TournamentInfo = {
   round: number;
   format?: string;
   decklists?: boolean;
+  registration?: boolean;
   players?: Player[];
   dropped?: string[];
 };
@@ -219,6 +220,7 @@ function AdminDashboard() {
   const [rounds, setRounds] = useState(4);
   const [format, setFormat] = useState<"standard" | "retro">("standard");
   const [collectDecklists, setCollectDecklists] = useState(false);
+  const [openRegistration, setOpenRegistration] = useState(true);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [addingPlayer, setAddingPlayer] = useState(false);
   const [showDecklists, setShowDecklists] = useState(false);
@@ -301,14 +303,15 @@ function AdminDashboard() {
         .filter(Boolean)
         .map((s) => s.replace(/^\d+\.\s*/, '').trim()) // Remove leading numbers and dots
         .filter(Boolean); // Filter again in case only numbers were present
-      if (!playersList.length) {
-        alert("Add at least one player (one per line).");
+      const selfRegistration = format === "retro" && collectDecklists && openRegistration;
+      if (!playersList.length && !selfRegistration) {
+        alert("Add at least one player (one per line), or turn on player self-registration.");
         return;
       }
       const data = await fetchJSON(`/api/tournaments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, total_rounds: rounds, players: playersList, format, decklists: format === "retro" && collectDecklists }),
+        body: JSON.stringify({ name, total_rounds: rounds, players: playersList, format, decklists: format === "retro" && collectDecklists, registration: selfRegistration }),
       });
       localStorage.setItem("tid", data.tournament_id);
       setTid(data.tournament_id);
@@ -964,9 +967,20 @@ function AdminDashboard() {
                 Collect GOAT decklists (players submit via a link; only you can view them)
               </label>
             )}
+            {format === "retro" && collectDecklists && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, marginLeft: 24, textTransform: 'none', letterSpacing: 0, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={openRegistration}
+                  onChange={(e) => setOpenRegistration(e.target.checked)}
+                  style={{ width: 'auto', margin: 0 }}
+                />
+                Players can register themselves via the link (you can start with 0 players)
+              </label>
+            )}
           </div>
           <div>
-            <label>Players (one per line)</label>
+            <label>Players (one per line){format === "retro" && collectDecklists && openRegistration ? " (optional)" : ""}</label>
             <textarea
               value={playersText}
               onChange={(e) => setPlayersText(e.target.value)}
@@ -1062,7 +1076,7 @@ function AdminDashboard() {
             {info?.decklists && (
               <>
                 <button onClick={copyDecklistLink} className="secondary">
-                  🃏 Decklist Link
+                  🃏 {info?.registration ? "Registration Link" : "Decklist Link"}
                 </button>
                 <button onClick={loadDecklists} disabled={decklistsLoading} className="secondary">
                   📋 View Decklists
@@ -1370,16 +1384,21 @@ function AdminDashboard() {
         </>
       )}
 
-      {standings.length > 0 && (
+      {info && (
         <div className="card">
-          <h2>🏆 Current Standings</h2>
+          <h2>{info.round ? "🏆 Current Standings" : `👥 Players (${players.length})`}</h2>
+          {!info.round && info.registration && (
+            <p style={{ fontSize: 13, color: '#7fe0ff', marginBottom: 12 }}>
+              Registration is open. Share the Registration Link; new players appear here automatically and registration closes when you pair Round 1.
+            </p>
+          )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
             <input
               type="text"
               value={newPlayerName}
               onChange={(e) => setNewPlayerName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") addPlayer(); }}
-              placeholder="Late entry: player name"
+              placeholder={info.round ? "Late entry: player name" : "Add player name"}
               style={{ flex: 1, minWidth: 180, maxWidth: 320, marginBottom: 0 }}
             />
             <button onClick={addPlayer} disabled={addingPlayer || !newPlayerName.trim()}>
