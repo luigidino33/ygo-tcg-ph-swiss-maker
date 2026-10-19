@@ -76,7 +76,7 @@ type TournamentInfo = {
   dropped?: string[];
 };
 
-type DeckEntry = { id: number; name: string; qty: number };
+type DeckEntry = { id: number; name: string; qty: number; type?: string; ban?: string | null };
 type SubmittedDeck = {
   player_id: string;
   player: string;
@@ -229,6 +229,8 @@ function AdminDashboard() {
   const [showDecklists, setShowDecklists] = useState(false);
   const [decklists, setDecklists] = useState<SubmittedDeck[]>([]);
   const [decklistsLoading, setDecklistsLoading] = useState(false);
+  const [viewDeckPid, setViewDeckPid] = useState<string | null>(null);
+  const [deckPreview, setDeckPreview] = useState<DeckEntry | null>(null);
   const [results, setResults] = useState<Record<string, { outcome: "A" | "B" | "TIE"; score?: [number, number] }>>({});
 
   // Tournament history
@@ -689,6 +691,8 @@ function AdminDashboard() {
     try {
       await fetchJSON(`/api/tournaments/${tid}/decklist/${pid}`, { method: "DELETE", headers: adminHeaders() });
       setDecklists((d) => d.filter((x) => x.player_id !== pid));
+      setViewDeckPid(null);
+      setDeckPreview(null);
     } catch (e) {
       alert(`Failed to reset decklist: ${errMsg(e)}`);
     }
@@ -1655,63 +1659,141 @@ function AdminDashboard() {
         </div>
       )}
 
-      {showDecklists && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h2>📋 GOAT Decklists ({decklists.length}/{players.length})</h2>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="secondary" onClick={loadDecklists} disabled={decklistsLoading}>Refresh</button>
-                <button className="secondary" onClick={() => setShowDecklists(false)}>Close</button>
-              </div>
-            </div>
-            {players.filter((p) => !decklists.some((d) => d.player_id === p.id)).length > 0 && (
-              <p style={{ fontSize: 12, color: '#ffcc80', marginBottom: 12 }}>
-                Not yet submitted: {players.filter((p) => !decklists.some((d) => d.player_id === p.id)).map((p) => p.name).join(", ")}
-              </p>
-            )}
-            {decklists.length === 0 && <p style={{ color: '#86b4e6' }}>No decklists submitted yet.</p>}
-            {decklists.map((d) => (
-              <details key={d.player_id} style={{ marginBottom: 8, border: '2px solid #2a6cb4', borderRadius: 8, padding: 10 }}>
-                <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>
-                  {d.player}{" "}
-                  <span style={{ fontWeight: 'normal', fontSize: 12, color: '#86b4e6' }}>
-                    {d.main.reduce((a, c) => a + c.qty, 0)} / {d.extra.reduce((a, c) => a + c.qty, 0)} / {d.side.reduce((a, c) => a + c.qty, 0)} (Main/Extra/Side)
+      {showDecklists && (() => {
+        const kindOf = (c: DeckEntry) => (!c.type ? 3 : c.type.includes("Monster") ? 0 : c.type.includes("Spell") ? 1 : 2);
+        const banLimit = (ban?: string | null) => (ban === "Limited" ? 1 : ban === "Semi-Limited" ? 2 : 0);
+        const banColor = (ban?: string | null) => (ban === "Limited" ? "#fb8c00" : "#fdd835");
+        const count = (list: DeckEntry[]) => list.reduce((s, c) => s + c.qty, 0);
+        const missing = players.filter((p) => !decklists.some((x) => x.player_id === p.id));
+        const deck = decklists.find((x) => x.player_id === viewDeckPid) || decklists[0];
+
+        const section = (title: string, list: DeckEntry[]) => {
+          const sorted = [...list].sort((x, y) => kindOf(x) - kindOf(y) || x.name.localeCompare(y.name));
+          const tiles = sorted.flatMap((c) => Array.from({ length: c.qty }, (_, i) => ({ c, key: `${c.id}-${i}` })));
+          const typed = list.every((c) => c.type);
+          const by = (k: number) => list.filter((c) => kindOf(c) === k).reduce((s, c) => s + c.qty, 0);
+          return (
+            <div className="md-section" key={title}>
+              <div className="md-section-head">
+                <span className="md-section-title">{title}</span>
+                {title === "Main Deck" && typed && list.length > 0 && (
+                  <span className="md-breakdown">
+                    <span><i style={{ background: "#e08a2e" }} />{by(0)}</span>
+                    <span><i style={{ background: "#1fa88e" }} />{by(1)}</span>
+                    <span><i style={{ background: "#c2478a" }} />{by(2)}</span>
                   </span>
-                </summary>
-                <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
-                  <button
-                    className="secondary"
-                    style={{ padding: '6px 12px', fontSize: 11 }}
-                    onClick={() => navigator.clipboard.writeText(decklistText(d)).then(() => alert("Decklist copied"))}
-                  >
-                    Copy
-                  </button>
-                  <button
-                    className="secondary"
-                    style={{ padding: '6px 12px', fontSize: 11, color: '#ef5350' }}
-                    onClick={() => resetDecklist(d.player_id, d.player)}
-                  >
-                    Reset
-                  </button>
-                </div>
-                {([["Main Deck", d.main], ["Extra Deck", d.extra], ["Side Deck", d.side]] as [string, DeckEntry[]][]).map(([title, list]) =>
-                  list.length ? (
-                    <div key={title} style={{ marginBottom: 8 }}>
-                      <div style={{ fontWeight: 'bold', fontSize: 12, color: '#86b4e6' }}>{title}</div>
-                      <div style={{ fontSize: 13 }}>
-                        {list.map((c) => (
-                          <div key={c.id}>{c.qty}x {c.name}</div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null
                 )}
-              </details>
-            ))}
+                <span className="md-count">{count(list)}</span>
+              </div>
+              {tiles.length === 0 ? (
+                <p style={{ fontSize: 12, color: "#86b4e6" }}>Empty</p>
+              ) : (
+                <div className="md-grid">
+                  {tiles.map(({ c, key }) => (
+                    <div key={key} className="md-slot md-filled">
+                      <img src={`/api/card-image/${c.id}`} alt={c.name} title={c.name} loading="lazy" onClick={() => setDeckPreview(c)} />
+                      {banLimit(c.ban) > 0 && (
+                        <span className="md-ban" style={{ background: banColor(c.ban) }}>{banLimit(c.ban)}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        return (
+          <div className="modal-overlay" onClick={() => { setShowDecklists(false); setDeckPreview(null); }}>
+            <div className="modal-content" style={{ maxWidth: 1100 }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                <h2 style={{ marginBottom: 0 }}>📋 GOAT Decklists ({decklists.length}/{players.length})</h2>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="secondary" onClick={loadDecklists} disabled={decklistsLoading}>Refresh</button>
+                  <button className="secondary" onClick={() => { setShowDecklists(false); setDeckPreview(null); }}>Close</button>
+                </div>
+              </div>
+
+              {missing.length > 0 && (
+                <p style={{ fontSize: 12, color: '#ffcc80', marginBottom: 12 }}>
+                  Not yet submitted: {missing.map((p) => p.name).join(", ")}
+                </p>
+              )}
+
+              {decklists.length === 0 ? (
+                <p style={{ color: '#86b4e6' }}>No decklists submitted yet.</p>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+                    {decklists.map((x) => (
+                      <button
+                        key={x.player_id}
+                        className={deck?.player_id === x.player_id ? "" : "secondary"}
+                        onClick={() => { setViewDeckPid(x.player_id); setDeckPreview(null); }}
+                        style={{ padding: '6px 18px', fontSize: 13 }}
+                      >
+                        {x.player}
+                      </button>
+                    ))}
+                  </div>
+
+                  {deck && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                        <div>
+                          <div style={{ fontFamily: 'Rajdhani, sans-serif', fontWeight: 700, fontSize: 20 }}>{deck.player}</div>
+                          <div style={{ fontSize: 12, color: '#86b4e6' }}>
+                            {count(deck.main)} Main / {count(deck.extra)} Extra / {count(deck.side)} Side
+                            {deck.submitted_at ? ` • submitted ${new Date(deck.submitted_at).toLocaleString()}` : ""}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            className="secondary"
+                            style={{ padding: '6px 16px', fontSize: 12 }}
+                            onClick={() => navigator.clipboard.writeText(decklistText(deck)).then(() => alert("Decklist copied"))}
+                          >
+                            Copy as text
+                          </button>
+                          <button
+                            className="secondary"
+                            style={{ padding: '6px 16px', fontSize: 12, color: '#ff8a80' }}
+                            onClick={() => resetDecklist(deck.player_id, deck.player)}
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+
+                      {deckPreview && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-start', marginBottom: 12, padding: 12, border: '1px solid rgba(70,160,255,0.5)', borderRadius: 4, background: 'rgba(2,12,30,0.6)' }}>
+                          <img src={`/api/card-image/${deckPreview.id}?size=big`} alt={deckPreview.name} style={{ width: 'min(260px, 55vw)', borderRadius: 6 }} />
+                          <div style={{ flex: 1, minWidth: 150 }}>
+                            <div style={{ fontWeight: 700, fontSize: 16 }}>{deckPreview.name}</div>
+                            {deckPreview.type && <div style={{ fontSize: 12, color: '#86b4e6', marginTop: 4 }}>{deckPreview.type}</div>}
+                            <div style={{ fontSize: 12, marginTop: 4 }}>x{deckPreview.qty} in this section</div>
+                            {deckPreview.ban && <div style={{ fontSize: 12, marginTop: 4, color: banColor(deckPreview.ban), fontWeight: 700 }}>{deckPreview.ban}</div>}
+                            <button className="secondary" onClick={() => setDeckPreview(null)} style={{ marginTop: 12, padding: '6px 16px', fontSize: 12 }}>
+                              Close preview
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="md-panel">
+                        {section("Main Deck", deck.main)}
+                        {section("Extra Deck", deck.extra)}
+                        {section("Side Deck", deck.side)}
+                      </div>
+                      <p style={{ fontSize: 11, color: '#86b4e6', marginTop: 8 }}>Tap a card to enlarge it.</p>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {historyPlayer && (
         <div className="modal-overlay">

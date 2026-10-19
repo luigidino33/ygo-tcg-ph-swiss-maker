@@ -374,6 +374,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           .nv-tabs button.active { background: linear-gradient(180deg, #d4f1ff, #3aa0ff); color: #fff; }
           .nv-tabs button.active::before { inset: 2px 2px 0 2px; background: linear-gradient(180deg, #0d4a96, #062a5e); }
 
+
+          /* Deck grid (decklist builder + admin viewer) */
+          .md-panel { background: linear-gradient(180deg, rgba(22, 42, 66, 0.9) 0%, rgba(9, 19, 33, 0.95) 100%); border: 1px solid rgba(120, 175, 215, 0.4); border-radius: 4px; padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.5); }
+          .md-section + .md-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(120, 175, 215, 0.2); }
+          .md-section-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+          .md-section-title { font-weight: 800; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #eaf4ff; padding-left: 10px; border-left: 3px solid #7fe0ff; font-family: 'Rajdhani', sans-serif; font-size: 15px; }
+          .md-breakdown { display: flex; gap: 10px; font-size: 12px; color: #cfd8ff; }
+          .md-breakdown span { display: inline-flex; align-items: center; gap: 4px; }
+          .md-breakdown i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+          .md-count { margin-left: auto; font-weight: 800; font-size: 15px; color: #eaf4ff; padding: 2px 10px; border: 1px solid rgba(58, 160, 255, 0.6); border-radius: 999px; background: rgba(0,0,0,0.35); }
+          .md-count small { font-weight: 600; font-size: 11px; color: #9fb0ff; margin-left: 1px; }
+          .md-grid { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 5px; }
+          .md-slot { position: relative; aspect-ratio: 421 / 614; border-radius: 3px; }
+          .md-empty { background: rgba(255,255,255,0.03); border: 1px dashed rgba(143,160,255,0.22); }
+          .md-filled img { width: 100%; height: 100%; display: block; border-radius: 3px; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.6); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+          .md-filled:hover img { transform: translateY(-3px) scale(1.05); box-shadow: 0 6px 14px rgba(0,0,0,0.8), 0 0 0 1px #7fe0ff, 0 0 12px rgba(127,224,255,0.6); z-index: 2; position: relative; }
+          .md-ban { position: absolute; top: -4px; left: -4px; width: 17px; height: 17px; border-radius: 50%; color: #1a1a1a; font-size: 11px; font-weight: 900; display: flex; align-items: center; justify-content: center; border: 1px solid #fff; z-index: 3; pointer-events: none; }
+
           /* Home: HUD circle buttons and pill list */
           .nv-home { max-width: 520px; margin: 0 auto; text-align: center; overflow-x: clip; padding: 24px 0; }
           .nv-note { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 6px auto 30px; max-width: 420px; }
@@ -478,6 +496,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             th { font-size: 11px; letter-spacing: 0.5px; }
             .modal-content { padding: 16px; }
             .modal-overlay { padding: 12px; }
+            .md-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+            .md-panel { padding: 10px; }
             .nv-hud-row { gap: 30px; flex-wrap: nowrap; margin-bottom: 36px; }
             .nv-hud { width: 112px; height: 112px; font-size: 15px; }
             .nv-hud.big { width: 150px; height: 150px; font-size: 18px; }
