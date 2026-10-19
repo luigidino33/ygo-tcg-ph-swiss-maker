@@ -221,6 +221,9 @@ function AdminDashboard() {
   const [format, setFormat] = useState<"standard" | "retro">("standard");
   const [collectDecklists, setCollectDecklists] = useState(false);
   const [openRegistration, setOpenRegistration] = useState(true);
+  const [editingRounds, setEditingRounds] = useState(false);
+  const [roundsInput, setRoundsInput] = useState(4);
+  const [savingRounds, setSavingRounds] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [addingPlayer, setAddingPlayer] = useState(false);
   const [showDecklists, setShowDecklists] = useState(false);
@@ -465,6 +468,26 @@ function AdminDashboard() {
     } catch (e) {
       console.error(e);
       alert(`Revert failed: ${errMsg(e)}`);
+    }
+  };
+
+  const saveRounds = async () => {
+    if (!tid) return;
+    setSavingRounds(true);
+    try {
+      await fetchJSON(`/api/tournaments/${tid}/set-rounds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ total_rounds: roundsInput }),
+      });
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+      setEditingRounds(false);
+    } catch (e) {
+      alert(`Failed to update rounds: ${errMsg(e)}`);
+    } finally {
+      setSavingRounds(false);
     }
   };
 
@@ -1063,7 +1086,40 @@ function AdminDashboard() {
                 <p style={{ color: '#cbd5e1', fontSize: 14, fontWeight: 500 }}>
                   Round {info.round} of {info.total_rounds} • {info.players?.length || 0} Duelists • {(info as any).format === "retro" ? "🕹️ Retro" : "⚔️ Standard"}
                 </p>
-                <p style={{ color: '#86b4e6', fontSize: 12, fontFamily: 'monospace', marginTop: 4 }}>
+                {editingRounds ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                    <label style={{ marginBottom: 0 }}>Total rounds</label>
+                    <input
+                      type="number"
+                      value={roundsInput}
+                      min={Math.max(1, info.round)}
+                      max={20}
+                      onChange={(e) => setRoundsInput(Number(e.target.value))}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveRounds(); }}
+                      style={{ width: 80, marginBottom: 0, textAlign: 'center' }}
+                    />
+                    <button onClick={saveRounds} disabled={savingRounds} style={{ padding: '6px 16px', fontSize: 13 }}>
+                      {savingRounds ? "Saving..." : "Save"}
+                    </button>
+                    <button className="secondary" onClick={() => setEditingRounds(false)} style={{ padding: '6px 16px', fontSize: 13 }}>
+                      Cancel
+                    </button>
+                    {suggestRounds(players.filter((p) => !info.dropped?.includes(p.id)).length) !== null && (
+                      <span style={{ fontSize: 12, color: '#86b4e6' }}>
+                        Suggested for {players.filter((p) => !info.dropped?.includes(p.id)).length} players: {suggestRounds(players.filter((p) => !info.dropped?.includes(p.id)).length)}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    className="secondary"
+                    onClick={() => { setRoundsInput(info.total_rounds); setEditingRounds(true); }}
+                    style={{ padding: '4px 14px', fontSize: 12, marginTop: 8 }}
+                  >
+                    ✏️ Edit Rounds
+                  </button>
+                )}
+                <p style={{ color: '#86b4e6', fontSize: 12, fontFamily: 'monospace', marginTop: 8 }}>
                   Tournament ID: {info.id}
                 </p>
               </>

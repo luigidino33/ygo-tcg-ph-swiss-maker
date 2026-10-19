@@ -957,6 +957,27 @@ def api_register(tid):
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+@app.post("/api/tournaments/<tid>/set-rounds")
+def api_set_rounds(tid):
+  try:
+    body = request.get_json(force=True) or {}
+    try:
+      total = int(body.get("total_rounds"))
+    except (TypeError, ValueError):
+      return jsonify({"error": "total_rounds must be a whole number."}), 400
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    played = current_round_number(t)
+    if total < max(1, played) or total > 20:
+      note = f" (Round {played} has already been paired)" if played else ""
+      return jsonify({"error": f"Rounds must be between {max(1, played)} and 20{note}."}), 400
+    t["total_rounds"] = total
+    kv_set_json(tid_key(tid), t)
+    return jsonify({"ok": True, "total_rounds": total})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 @app.post("/api/tournaments/<tid>/add-player")
 def api_add_player(tid):
   # Late entry: included from the next pairing onward (pair_next uses all non-dropped
