@@ -1561,7 +1561,7 @@ def api_submit_decklist(tid):
       "player_id": pid,
       "player": player["name"],
       "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-      **{sec: [{"id": cid, "name": cards[cid]["name"], "qty": q} for cid, q in counts.items()]
+      **{sec: [{"id": cid, "name": cards[cid]["name"], "qty": q, "type": cards[cid]["type"], "ban": cards[cid]["ban"]} for cid, q in counts.items()]
          for sec, counts in sections.items()},
     }
     kv_set_json(decks_key(tid, pid), doc)
