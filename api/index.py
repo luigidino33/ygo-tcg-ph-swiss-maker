@@ -607,13 +607,14 @@ def create_tournament():
     name = (data.get("name") or "Tournament").strip()
     total_rounds = int(data.get("total_rounds") or 4)
     players = [p.strip() for p in (data.get("players") or []) if p.strip()]
-    if not players:
-      return jsonify({"error": "players list is required"}), 400
 
     fmt = (data.get("format") or "standard").strip().lower()
     if fmt not in ("standard", "retro"):
       fmt = "standard"
     decklists = bool(data.get("decklists")) and fmt == "retro"
+    registration = bool(data.get("registration")) and decklists
+    if not players and not registration:
+      return jsonify({"error": "players list is required"}), 400
 
     tid = uuid.uuid4().hex[:10]
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -622,6 +623,7 @@ def create_tournament():
       "total_rounds": total_rounds,
       "format": fmt,
       "decklists": decklists,
+      "registration": registration,
       "players": [{"id": new_id("p"), "name": n} for n in players],
       "rounds": [],
       "created_at": created_at,
@@ -640,6 +642,7 @@ def create_tournament():
       "round": 0,
       "format": fmt,
       "decklists": decklists,
+      "registration": registration,
       "players": tdoc["players"],
     }
     return jsonify({"tournament_id": tid, "info": initial_info})
@@ -658,6 +661,7 @@ def get_tournament(tid):
       "total_rounds": t["total_rounds"],
       "format": t.get("format", "standard"),
       "decklists": bool(t.get("decklists")),
+      "registration": bool(t.get("registration")),
       "round": current_round_number(t),
       "players": t.get("players", []),
       "dropped": t.get("dropped", []),
@@ -754,6 +758,9 @@ def api_pair_next(tid):
     curr = current_round_number(t)
     if curr >= int(t["total_rounds"]):
       return jsonify({"ok": False, "message": "All rounds completed.", "round": curr})
+    dropped = set(t.get("dropped", []))
+    if sum(1 for p in t.get("players", []) if p["id"] not in dropped) < 2:
+      return jsonify({"ok": False, "message": "At least 2 players are needed to pair a round."})
 
     rnd_no, matches = pair_next(t)
     t["rounds"].append({"n": rnd_no, "matches": matches})
@@ -908,34 +915,60 @@ def api_restart_round(tid):
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+MAX_NAME_LEN = 40
+
+def _append_player(tid: str, t: dict, name: str):
+  # Returns (player, error). Adds to the roster, persists, and updates the index count.
+  name = " ".join(name.split())
+  if not name:
+    return None, "Player name is required."
+  if len(name) > MAX_NAME_LEN:
+    return None, f"Name must be at most {MAX_NAME_LEN} characters."
+  if any(p["name"].strip().lower() == name.lower() for p in t.get("players", [])):
+    return None, f"A player named '{name}' is already in this tournament."
+  player = {"id": new_id("p"), "name": name}
+  if current_round_number(t) > 0:
+    player["joined_round"] = current_round_number(t)
+  t["players"].append(player)
+  kv_set_json(tid_key(tid), t)
+  idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+  for e in idx:
+    if e.get("id") == tid:
+      e["player_count"] = len(t["players"])
+  kv_set_json(TOURNAMENT_INDEX_KEY, idx)
+  return player, None
+
+@app.post("/api/tournaments/<tid>/register")
+def api_register(tid):
+  # Public self-registration for tournaments with registration enabled; closes at Round 1.
+  try:
+    body = request.get_json(force=True) or {}
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    if not t.get("registration"):
+      return jsonify({"error": "Registration is not open for this tournament."}), 400
+    if t.get("rounds"):
+      return jsonify({"error": "Registration is closed (the tournament has started)."}), 400
+    player, err = _append_player(tid, t, body.get("name") or "")
+    if err:
+      return jsonify({"error": err}), 400
+    return jsonify({"ok": True, "player": player})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 @app.post("/api/tournaments/<tid>/add-player")
 def api_add_player(tid):
   # Late entry: included from the next pairing onward (pair_next uses all non-dropped
   # players); rounds already paired without them count as losses (see missed_rounds).
   try:
     body = request.get_json(force=True) or {}
-    name = (body.get("name") or "").strip()
-    if not name:
-      return jsonify({"error": "Player name is required."}), 400
-
     t = read_tdoc_or_retry(tid)
     if not t:
       return jsonify({"error": "not found"}), 404
-    if any(p["name"].strip().lower() == name.lower() for p in t.get("players", [])):
-      return jsonify({"error": f"A player named '{name}' is already in this tournament."}), 400
-
-    player = {"id": new_id("p"), "name": name}
-    if current_round_number(t) > 0:
-      player["joined_round"] = current_round_number(t)
-    t["players"].append(player)
-    kv_set_json(tid_key(tid), t)
-
-    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
-    for e in idx:
-      if e.get("id") == tid:
-        e["player_count"] = len(t["players"])
-    kv_set_json(TOURNAMENT_INDEX_KEY, idx)
-
+    player, err = _append_player(tid, t, body.get("name") or "")
+    if err:
+      return jsonify({"error": err}), 400
     return jsonify({"ok": True, "player": player, "standings": compute_standings(t)})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -1431,6 +1464,7 @@ def api_decklist_status(tid):
     submitted = {k[len(prefix):] for k in kv_keys(f"{prefix}*")}
     return jsonify({
       "enabled": bool(t.get("decklists")),
+      "registration": bool(t.get("registration")),
       "locked": _decklist_locked(t),
       "name": t["name"],
       "players": [{"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted} for p in t.get("players", [])],
