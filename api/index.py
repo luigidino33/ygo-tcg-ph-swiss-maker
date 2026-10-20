@@ -4,9 +4,23 @@ import os, json, random, uuid, time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 import hmac
+from functools import wraps
 from flask import Flask, request, jsonify, Response
 
 app = Flask(__name__)
+
+def _admin_ok() -> bool:
+  admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+  given = request.headers.get("X-Admin-Password", "")
+  return bool(admin_pw) and hmac.compare_digest(admin_pw.encode(), given.encode())
+
+def admin_required(fn):
+  @wraps(fn)
+  def wrapper(*args, **kwargs):
+    if not _admin_ok():
+      return jsonify({"error": "Admin password required."}), 401
+    return fn(*args, **kwargs)
+  return wrapper
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Vercel KV (Upstash Redis) REST helpers
@@ -56,6 +70,30 @@ def kv_get_json(key: str):
     return json.loads(val)
   except Exception:
     return val
+
+def kv_get_raw(key: str) -> Optional[str]:
+  import requests
+  r = requests.get(f"{_kv_url()}/get/{key}", headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+  if r.status_code == 404:
+    return None
+  r.raise_for_status()
+  return r.json().get("result")
+
+_CAS_SCRIPT = "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2]) return 1 else return 0 end"
+
+def kv_cas_json(key: str, expected_raw: str, value) -> bool:
+  # Atomically write value only if the key still holds expected_raw.
+  import requests
+  body = json.dumps(value, separators=(",", ":"))
+  r = requests.post(_kv_url(), json=["EVAL", _CAS_SCRIPT, "1", key, expected_raw, body],
+                    headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+  if r.status_code >= 400:
+    raise RuntimeError(f"KV CAS failed ({r.status_code}): {r.text}")
+  return r.json().get("result") == 1
+
+def kv_del(key: str) -> None:
+  import requests
+  requests.post(f"{_kv_url()}/del/{key}", headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
 
 def kv_keys(pattern: str) -> list[str]:
   import requests
@@ -131,6 +169,33 @@ def _fetch_archetype_image(archetype: str) -> Optional[str]:
 
 def tid_key(tid: str) -> str:
   return f"t_{tid}"
+
+class Reject(Exception):
+  """Raised inside an update_tdoc mutation to abort without writing."""
+  def __init__(self, payload: dict, status: int = 400):
+    super().__init__(payload)
+    self.payload, self.status = payload, status
+
+def update_tdoc(tid: str, mutate, attempts: int = 20):
+  # Optimistic read-modify-write so concurrent writers (e.g. a burst of public
+  # registrations) can't silently overwrite each other. Returns (t, result) or None.
+  key = tid_key(tid)
+  for attempt in range(attempts):
+    raw = kv_get_raw(key)
+    if raw is None:
+      time.sleep(0.2)
+      raw = kv_get_raw(key)
+      if raw is None:
+        return None
+    t = json.loads(raw)
+    result = mutate(t)
+    if kv_cas_json(key, raw, t):
+      return t, result
+    time.sleep(random.uniform(0, 0.03 * 2 ** min(attempt, 5)))
+  raise Reject({"error": "Lots of people are updating this tournament right now. Please try again."}, 503)
+
+def reject_response(e: "Reject"):
+  return jsonify(e.payload), e.status
 
 def decks_key(tid: str, pid: str = "") -> str:
   # One key per player so concurrent submissions can't clobber each other.
@@ -574,6 +639,7 @@ def health():
     return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.get("/api/debug/env")
+@admin_required
 def debug_env():
   try:
     d = {
@@ -591,6 +657,7 @@ def debug_env():
     return jsonify({"error": str(e)}), 500
 
 @app.get("/api/debug/kv-auth")
+@admin_required
 def debug_kv_auth():
   try:
     import requests
@@ -601,6 +668,7 @@ def debug_kv_auth():
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments")
+@admin_required
 def create_tournament():
   try:
     data = request.get_json(force=True)
@@ -670,6 +738,7 @@ def get_tournament(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/edit-result")
+@admin_required
 def api_edit_result(tid):
   try:
     body = request.get_json(silent=True) or {}
@@ -745,26 +814,27 @@ def api_active_pairs(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/pair-next")
+@admin_required
 def api_pair_next(tid):
   try:
-    t = read_tdoc_or_retry(tid)
-    if not t:
+    def mutate(t):
+      if round_has_pending(latest_round(t)):
+        raise Reject({"ok": False, "message": "Finalize the current round before pairing the next."}, 200)
+      curr = current_round_number(t)
+      if curr >= int(t["total_rounds"]):
+        raise Reject({"ok": False, "message": "All rounds completed.", "round": curr}, 200)
+      dropped = set(t.get("dropped", []))
+      if sum(1 for p in t.get("players", []) if p["id"] not in dropped) < 2:
+        raise Reject({"ok": False, "message": "At least 2 players are needed to pair a round."}, 200)
+      _sync_deck_archetypes(tid, t)
+      rnd_no, matches = pair_next(t)
+      t["rounds"].append({"n": rnd_no, "matches": matches})
+      return rnd_no, matches
+
+    res = update_tdoc(tid, mutate)
+    if not res:
       return jsonify({"error": "not found"}), 404
-
-    last = latest_round(t)
-    if round_has_pending(last):
-      return jsonify({"ok": False, "message": "Finalize the current round before pairing the next."})
-
-    curr = current_round_number(t)
-    if curr >= int(t["total_rounds"]):
-      return jsonify({"ok": False, "message": "All rounds completed.", "round": curr})
-    dropped = set(t.get("dropped", []))
-    if sum(1 for p in t.get("players", []) if p["id"] not in dropped) < 2:
-      return jsonify({"ok": False, "message": "At least 2 players are needed to pair a round."})
-
-    rnd_no, matches = pair_next(t)
-    t["rounds"].append({"n": rnd_no, "matches": matches})
-    kv_set_json(tid_key(tid), t)
+    t, (rnd_no, matches) = res
 
     id2name = {p["id"]: p["name"] for p in t["players"]}
     pairs = [{
@@ -774,10 +844,13 @@ def api_pair_next(tid):
       "match_id": m["id"]
     } for m in matches]
     return jsonify({"ok": True, "round": rnd_no, "pairs": pairs})
+  except Reject as e:
+    return reject_response(e)
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/finalize-round")
+@admin_required
 def api_finalize_round(tid):
   try:
     data = request.get_json(force=True)
@@ -809,6 +882,7 @@ def api_finalize_round(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/edit-pairings")
+@admin_required
 def api_edit_pairings(tid):
   """
   Admin: overwrite the current round's pairings (structure) before results.
@@ -883,6 +957,7 @@ def api_edit_pairings(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/restart-round")
+@admin_required
 def api_restart_round(tid):
   """
   Recompute pairings for the current round (same round number), before results.
@@ -917,47 +992,53 @@ def api_restart_round(tid):
 
 MAX_NAME_LEN = 40
 
-def _append_player(tid: str, t: dict, name: str):
-  # Returns (player, error). Adds to the roster, persists, and updates the index count.
+def _append_player(t: dict, name: str) -> dict:
   name = " ".join(name.split())
   if not name:
-    return None, "Player name is required."
+    raise Reject({"error": "Player name is required."})
   if len(name) > MAX_NAME_LEN:
-    return None, f"Name must be at most {MAX_NAME_LEN} characters."
+    raise Reject({"error": f"Name must be at most {MAX_NAME_LEN} characters."})
   if any(p["name"].strip().lower() == name.lower() for p in t.get("players", [])):
-    return None, f"A player named '{name}' is already in this tournament."
+    raise Reject({"error": f"A player named '{name}' is already in this tournament."})
   player = {"id": new_id("p"), "name": name}
   if current_round_number(t) > 0:
     player["joined_round"] = current_round_number(t)
   t["players"].append(player)
-  kv_set_json(tid_key(tid), t)
+  return player
+
+def _update_index_count(tid: str, count: int) -> None:
   idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
   for e in idx:
     if e.get("id") == tid:
-      e["player_count"] = len(t["players"])
+      e["player_count"] = count
   kv_set_json(TOURNAMENT_INDEX_KEY, idx)
-  return player, None
 
 @app.post("/api/tournaments/<tid>/register")
 def api_register(tid):
   # Public self-registration for tournaments with registration enabled; closes at Round 1.
   try:
-    body = request.get_json(force=True) or {}
-    t = read_tdoc_or_retry(tid)
-    if not t:
+    name = (request.get_json(force=True) or {}).get("name") or ""
+
+    def mutate(t):
+      if not t.get("registration"):
+        raise Reject({"error": "Registration is not open for this tournament."})
+      if t.get("rounds"):
+        raise Reject({"error": "Registration is closed (the tournament has started)."})
+      return _append_player(t, name)
+
+    res = update_tdoc(tid, mutate)
+    if not res:
       return jsonify({"error": "not found"}), 404
-    if not t.get("registration"):
-      return jsonify({"error": "Registration is not open for this tournament."}), 400
-    if t.get("rounds"):
-      return jsonify({"error": "Registration is closed (the tournament has started)."}), 400
-    player, err = _append_player(tid, t, body.get("name") or "")
-    if err:
-      return jsonify({"error": err}), 400
+    t, player = res
+    _update_index_count(tid, len(t["players"]))
     return jsonify({"ok": True, "player": player})
+  except Reject as e:
+    return reject_response(e)
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/set-rounds")
+@admin_required
 def api_set_rounds(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -979,22 +1060,54 @@ def api_set_rounds(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/add-player")
+@admin_required
 def api_add_player(tid):
   # Late entry: included from the next pairing onward (pair_next uses all non-dropped
   # players); rounds already paired without them count as losses (see missed_rounds).
   try:
-    body = request.get_json(force=True) or {}
-    t = read_tdoc_or_retry(tid)
-    if not t:
+    name = (request.get_json(force=True) or {}).get("name") or ""
+    res = update_tdoc(tid, lambda t: _append_player(t, name))
+    if not res:
       return jsonify({"error": "not found"}), 404
-    player, err = _append_player(tid, t, body.get("name") or "")
-    if err:
-      return jsonify({"error": err}), 400
+    t, player = res
+    _update_index_count(tid, len(t["players"]))
     return jsonify({"ok": True, "player": player, "standings": compute_standings(t)})
+  except Reject as e:
+    return reject_response(e)
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/tournaments/<tid>/remove-player")
+@admin_required
+def api_remove_player(tid):
+  # Hard delete for typo/joke entries; only before Round 1, when no match references them.
+  try:
+    pid = (request.get_json(force=True) or {}).get("player_id")
+
+    def mutate(t):
+      if t.get("rounds"):
+        raise Reject({"error": "Players can only be removed before Round 1. Use Drop instead."})
+      player = next((p for p in t.get("players", []) if p["id"] == pid), None)
+      if not player:
+        raise Reject({"error": "Unknown player_id"})
+      t["players"] = [p for p in t["players"] if p["id"] != pid]
+      t["dropped"] = [d for d in t.get("dropped", []) if d != pid]
+      return player
+
+    res = update_tdoc(tid, mutate)
+    if not res:
+      return jsonify({"error": "not found"}), 404
+    t, player = res
+    kv_del(decks_key(tid, pid))
+    _update_index_count(tid, len(t["players"]))
+    return jsonify({"ok": True, "message": f"{player['name']} has been removed.", "standings": compute_standings(t)})
+  except Reject as e:
+    return reject_response(e)
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/drop-player")
+@admin_required
 def api_drop_player(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1024,6 +1137,7 @@ def api_drop_player(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/undrop-player")
+@admin_required
 def api_undrop_player(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1049,6 +1163,7 @@ def api_undrop_player(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/undo-finalize")
+@admin_required
 def api_undo_finalize(tid):
   try:
     t = read_tdoc_or_retry(tid)
@@ -1075,6 +1190,7 @@ def api_undo_finalize(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/revert-round")
+@admin_required
 def api_revert_round(tid):
   # Drop the latest round entirely (pairings + results) so the previous round,
   # with its results intact, becomes current again and can be corrected.
@@ -1148,13 +1264,12 @@ def api_tournament_history():
     return jsonify({"error": str(e)}), 500
 
 @app.delete("/api/tournaments/<tid>")
+@admin_required
 def api_delete_tournament(tid):
   try:
-    import requests as req
     # Delete the tournament doc (and any submitted decklists)
     for key in [tid_key(tid)] + kv_keys(f"{decks_key(tid)}*"):
-      url = f"{_kv_url()}/del/{key}"
-      req.post(url, headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+      kv_del(key)
 
     # Remove from index
     idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
@@ -1214,6 +1329,7 @@ def api_archetype_images_batch():
 # ── Deck archetype tagging ───────────────────────────────────────────────────
 
 @app.post("/api/tournaments/<tid>/set-deck")
+@admin_required
 def api_set_deck(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1236,6 +1352,7 @@ def api_set_deck(tid):
       if p["id"] == pid:
         p["deck"] = deck
         p["archetypes"] = archetypes
+        p.pop("deck_auto", None)
         found = True
         break
     if not found:
@@ -1326,7 +1443,7 @@ def api_player_stats():
     if not player_name:
       return jsonify({"error": "name query param required"}), 400
 
-    idx = kv_get_json(TOURNAMENT_INDEX_KEY) or []
+    idx = _rebuild_tournament_index()
     stats = {
       "name": player_name,
       "tournaments": 0,
@@ -1343,13 +1460,11 @@ def api_player_stats():
       t = kv_get_json(tid_key(entry["id"]))
       if not t:
         continue
-      pid = None
-      for p in t.get("players", []):
-        if p["name"].lower() == player_name.lower():
-          pid = p["id"]
-          break
-      if not pid:
+      player = next((p for p in t.get("players", []) if p["name"].strip().lower() == player_name.lower()), None)
+      if not player:
         continue
+      pid = player["id"]
+      stats["name"] = player["name"].strip()
 
       nodes = rebuild_graph(t)
       node = nodes.get(pid)
@@ -1375,10 +1490,18 @@ def api_player_stats():
         "tournament_id": entry["id"],
         "tournament_name": entry.get("name", "?"),
         "date": entry.get("created_at", ""),
+        "format": t.get("format", "standard"),
         "wins": w,
         "losses": l,
+        "draws": len(node.draws),
+        "byes": b,
+        "omw": round(omw, 1),
         "rank": rank,
         "total_players": len(t.get("players", [])),
+        "rounds_played": current_round_number(t),
+        "total_rounds": t.get("total_rounds"),
+        "deck": player.get("deck") or "",
+        "dropped": pid in set(t.get("dropped", [])),
       })
 
     total_matches = stats["total_wins"] + stats["total_losses"]
@@ -1397,11 +1520,6 @@ EXTRA_DECK_TYPES = ("Fusion", "Synchro", "XYZ", "Link")
 GOAT_COPY_LIMITS = {"Forbidden": 0, "Limited": 1, "Semi-Limited": 2}
 _card_search_cache: Dict[str, tuple] = {}
 
-def _admin_ok() -> bool:
-  admin_pw = os.environ.get("ADMIN_PASSWORD", "")
-  given = request.headers.get("X-Admin-Password", "")
-  return bool(admin_pw) and hmac.compare_digest(admin_pw.encode(), given.encode())
-
 def _slim_card(c: dict) -> dict:
   ban = (c.get("banlist_info") or {}).get("ban_goat")
   imgs = c.get("card_images") or [{}]
@@ -1416,6 +1534,7 @@ def _slim_card(c: dict) -> dict:
     "def": c.get("def"),
     "desc": c.get("desc"),
     "ban": ban,
+    "archetype": c.get("archetype"),
     "extra": any(t in (c.get("type") or "") for t in EXTRA_DECK_TYPES),
     "img": imgs[0].get("id", c.get("id")),
   }
@@ -1436,6 +1555,76 @@ def _goat_cardinfo(params: dict) -> dict:
     _card_search_cache.clear()
   _card_search_cache[key] = (time.time(), data)
   return data
+
+MONARCHS = {"Zaborg the Thunder Monarch", "Mobius the Frost Monarch", "Thestalos the Firestorm Monarch", "Granmarg the Rock Monarch"}
+
+def _detect_goat_archetype(cards: Dict[int, dict], main: Dict[int, int], extra: Dict[int, int]) -> Optional[str]:
+  # GOAT decks are named by strategy rather than card archetype, so check the
+  # well-known signatures first, then fall back to card archetype / monster type.
+  names = {cards[cid]["name"]: q for cid, q in main.items() if cid in cards}
+  if names.get("Scapegoat") and names.get("Metamorphosis"):
+    return "Goat Control"
+  if sum(q for n, q in names.items() if n in MONARCHS) >= 3:
+    return "Monarch"
+  by_arch: Dict[str, int] = {}
+  for cid, q in list(main.items()) + list(extra.items()):
+    arch = (cards.get(cid) or {}).get("archetype")
+    if arch:
+      by_arch[arch] = by_arch.get(arch, 0) + q
+  if by_arch:
+    arch, n = max(by_arch.items(), key=lambda kv: kv[1])
+    if n >= 8:
+      return arch
+  by_race: Dict[str, int] = {}
+  monsters = 0
+  for cid, q in main.items():
+    c = cards.get(cid) or {}
+    if "Monster" in (c.get("type") or ""):
+      monsters += q
+      if c.get("race"):
+        by_race[c["race"]] = by_race.get(c["race"], 0) + q
+  if monsters >= 8 and by_race:
+    race, n = max(by_race.items(), key=lambda kv: kv[1])
+    if n / monsters >= 0.6:
+      return race
+  return None
+
+def _goat_cards_by_id(ids) -> Dict[int, dict]:
+  ids = sorted(set(ids))
+  cards: Dict[int, dict] = {}
+  for i in range(0, len(ids), 40):
+    data = _goat_cardinfo({"id": ",".join(str(x) for x in ids[i:i + 40])})
+    for c in data.get("data", []):
+      cards[c["id"]] = _slim_card(c)
+  return cards
+
+def _deck_doc_archetype(tid: str, doc: dict) -> Optional[str]:
+  # Older submissions predate detection: compute once and persist on the player's own key.
+  if "archetype" in doc:
+    return doc["archetype"]
+  main = {e["id"]: e["qty"] for e in doc.get("main", [])}
+  extra = {e["id"]: e["qty"] for e in doc.get("extra", [])}
+  label = _detect_goat_archetype(_goat_cards_by_id(list(main) + list(extra)), main, extra)
+  doc["archetype"] = label
+  kv_set_json(decks_key(tid, doc["player_id"]), doc)
+  return label
+
+def _sync_deck_archetypes(tid: str, t: dict) -> bool:
+  # Copy detected archetypes from submitted decklists onto players, never
+  # overwriting a deck the organizer tagged by hand. Caller persists t.
+  if not t.get("decklists"):
+    return False
+  docs = {d["player_id"]: d for d in (kv_get_json(k) for k in kv_keys(f"{decks_key(tid)}*")) if d}
+  changed = False
+  for p in t.get("players", []):
+    doc = docs.get(p["id"])
+    if not doc or (p.get("deck") and not p.get("deck_auto")):
+      continue
+    label = _deck_doc_archetype(tid, doc)
+    if label and (p.get("deck") != label or p.get("archetypes") != [label]):
+      p["deck"], p["archetypes"], p["deck_auto"] = label, [label], True
+      changed = True
+  return changed
 
 @app.get("/api/cards/search")
 def api_card_search():
@@ -1475,6 +1664,10 @@ def api_card_image(cid):
 def _decklist_locked(t: dict) -> bool:
   return bool(t.get("rounds"))
 
+def _can_submit_deck(t: dict, player: dict) -> bool:
+  # Submission closes at Round 1, except for late entrants added after it started.
+  return not _decklist_locked(t) or bool(player.get("joined_round"))
+
 @app.get("/api/tournaments/<tid>/decklist-status")
 def api_decklist_status(tid):
   try:
@@ -1488,7 +1681,8 @@ def api_decklist_status(tid):
       "registration": bool(t.get("registration")),
       "locked": _decklist_locked(t),
       "name": t["name"],
-      "players": [{"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted} for p in t.get("players", [])],
+      "players": [{"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted, "can_submit": _can_submit_deck(t, p)}
+                  for p in t.get("players", [])],
     })
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -1503,11 +1697,11 @@ def api_submit_decklist(tid):
       return jsonify({"error": "not found"}), 404
     if not t.get("decklists"):
       return jsonify({"error": "Decklist submission is not enabled for this tournament."}), 400
-    if _decklist_locked(t):
-      return jsonify({"error": "Decklist submission is closed (the tournament has started)."}), 400
     player = next((p for p in t.get("players", []) if p["id"] == pid), None)
     if not player:
       return jsonify({"error": "Unknown player."}), 400
+    if not _can_submit_deck(t, player):
+      return jsonify({"error": "Decklist submission is closed (the tournament has started)."}), 400
     if kv_get_json(decks_key(tid, pid)) is not None:
       return jsonify({"error": "A decklist was already submitted for this player. Ask the organizer to reset it."}), 409
 
@@ -1536,13 +1730,7 @@ def api_submit_decklist(tid):
         totals[cid] = totals.get(cid, 0) + q
 
     # Verify every card against the GOAT card pool and banlist server-side.
-    ids = sorted(totals)
-    cards: Dict[int, dict] = {}
-    for i in range(0, len(ids), 40):
-      chunk = ids[i:i + 40]
-      data = _goat_cardinfo({"id": ",".join(str(x) for x in chunk)})
-      for c in data.get("data", []):
-        cards[c["id"]] = _slim_card(c)
+    cards = _goat_cards_by_id(totals)
     for cid, total in totals.items():
       c = cards.get(cid)
       if not c:
@@ -1561,6 +1749,7 @@ def api_submit_decklist(tid):
       "player_id": pid,
       "player": player["name"],
       "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+      "archetype": _detect_goat_archetype(cards, sections["main"], sections["extra"]),
       **{sec: [{"id": cid, "name": cards[cid]["name"], "qty": q, "type": cards[cid]["type"], "ban": cards[cid]["ban"]} for cid, q in counts.items()]
          for sec, counts in sections.items()},
     }
@@ -1572,25 +1761,32 @@ def api_submit_decklist(tid):
     return jsonify({"error": str(e)}), 500
 
 @app.get("/api/tournaments/<tid>/decklists")
+@admin_required
 def api_get_decklists(tid):
   # Admin-only: decklists are never exposed through any public endpoint.
   try:
-    if not _admin_ok():
-      return jsonify({"error": "Admin password required."}), 401
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    if t.get("rounds") and _sync_deck_archetypes(tid, t):
+      kv_set_json(tid_key(tid), t)
     prefix = decks_key(tid)
     docs = [d for d in (kv_get_json(k) for k in kv_keys(f"{prefix}*")) if d]
+    for d in docs:
+      _deck_doc_archetype(tid, d)
+    tags = {p["id"]: p.get("deck") for p in t.get("players", []) if p.get("deck") and not p.get("deck_auto")}
+    for d in docs:
+      d["deck_tag"] = tags.get(d["player_id"]) or d.get("archetype")
     docs.sort(key=lambda d: (d.get("player") or "").lower())
     return jsonify({"decklists": docs})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
 @app.delete("/api/tournaments/<tid>/decklist/<pid>")
+@admin_required
 def api_reset_decklist(tid, pid):
   try:
-    import requests as req
-    if not _admin_ok():
-      return jsonify({"error": "Admin password required."}), 401
-    req.post(f"{_kv_url()}/del/{decks_key(tid, pid)}", headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+    kv_del(decks_key(tid, pid))
     return jsonify({"ok": True})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -1605,7 +1801,7 @@ def api_admin_auth():
     admin_pw = os.environ.get("ADMIN_PASSWORD", "")
     if not admin_pw:
       return jsonify({"ok": False, "message": "ADMIN_PASSWORD not configured on server."}), 500
-    if password == admin_pw:
+    if hmac.compare_digest(password.encode(), admin_pw.encode()):
       return jsonify({"ok": True})
     return jsonify({"ok": False, "message": "Incorrect password."}), 401
   except Exception as e:

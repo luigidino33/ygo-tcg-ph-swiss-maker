@@ -368,7 +368,11 @@ function LeaderboardTab({ players, format }: { players: PlayerStat[]; format: "s
                   {i === 2 && "\u{1F949} "}
                   {i + 1}
                 </td>
-                <td style={{ fontWeight: "bold" }}>{p.name}</td>
+                <td style={{ fontWeight: "bold" }}>
+                  <a href={`/players/${encodeURIComponent(p.name)}`} style={{ color: "inherit", textDecoration: "underline dotted", textUnderlineOffset: 3 }}>
+                    {p.name}
+                  </a>
+                </td>
                 <td style={{ textAlign: "center" }}>{p.tournaments}</td>
                 <td style={{ textAlign: "center", color: "#81c784" }}>{p.wins}</td>
                 <td style={{ textAlign: "center", color: "#ef5350" }}>{p.losses}</td>

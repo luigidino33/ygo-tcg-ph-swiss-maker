@@ -81,6 +81,8 @@ type SubmittedDeck = {
   player_id: string;
   player: string;
   submitted_at: string;
+  archetype?: string | null;
+  deck_tag?: string | null;
   main: DeckEntry[];
   extra: DeckEntry[];
   side: DeckEntry[];
@@ -117,7 +119,16 @@ function suggestRounds(playerCount: number): number | null {
 }
 
 const fetchJSON = async (url: string, init?: RequestInit) => {
-  const res = await fetch(url, { ...init, cache: "no-store" });
+  const headers = { ...((init?.headers as Record<string, string>) || {}), "X-Admin-Password": sessionStorage.getItem("admin_pw") || "" };
+  const res = await fetch(url, { ...init, headers, cache: "no-store" });
+  if (res.status === 401 && url !== "/api/admin/auth") {
+    // Session predates server-side auth, or the password changed: log in again.
+    sessionStorage.removeItem("admin_authed");
+    sessionStorage.removeItem("admin_pw");
+    alert("Your admin session has expired. Please log in again.");
+    window.location.reload();
+    throw new Error("Admin password required.");
+  }
   const text = await res.text();
   let data: any = undefined;
   try {
@@ -138,7 +149,7 @@ export default function Page() {
 
   // Check session
   useEffect(() => {
-    if (sessionStorage.getItem("admin_authed") === "1") setAuthed(true);
+    if (sessionStorage.getItem("admin_authed") === "1" && sessionStorage.getItem("admin_pw")) setAuthed(true);
   }, []);
 
   const doLogin = async () => {
@@ -535,6 +546,24 @@ function AdminDashboard() {
     }
   };
 
+  const removePlayer = async (playerId: string, playerName: string) => {
+    if (!tid) return;
+    if (!confirm(`Remove ${playerName} from the tournament? This deletes them and any submitted decklist.`)) return;
+    try {
+      const res = await fetchJSON(`/api/tournaments/${tid}/remove-player`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId }),
+      });
+      setStandings(res.standings || []);
+      const i = await fetchJSON(`/api/tournaments/${tid}`);
+      setInfo(i);
+      setPlayers(i.players || []);
+    } catch (e) {
+      alert(`Failed to remove player: ${errMsg(e)}`);
+    }
+  };
+
   const undropPlayer = async (playerId: string, playerName: string) => {
     if (!tid) return;
     if (!confirm(`Reinstate ${playerName} into the tournament?`)) return;
@@ -661,8 +690,6 @@ function AdminDashboard() {
     );
   };
 
-  const adminHeaders = () => ({ "X-Admin-Password": sessionStorage.getItem("admin_pw") || "" });
-
   const copyDecklistLink = () => {
     if (!tid) return;
     const url = `${window.location.origin}/decklist/${tid}`;
@@ -676,7 +703,7 @@ function AdminDashboard() {
     if (!tid) return;
     setDecklistsLoading(true);
     try {
-      const res = await fetchJSON(`/api/tournaments/${tid}/decklists`, { headers: adminHeaders() });
+      const res = await fetchJSON(`/api/tournaments/${tid}/decklists`);
       setDecklists(res.decklists || []);
       setShowDecklists(true);
     } catch (e) {
@@ -689,7 +716,7 @@ function AdminDashboard() {
   const resetDecklist = async (pid: string, playerName: string) => {
     if (!tid || !confirm(`Reset ${playerName}'s decklist? They will be able to submit a new one.`)) return;
     try {
-      await fetchJSON(`/api/tournaments/${tid}/decklist/${pid}`, { method: "DELETE", headers: adminHeaders() });
+      await fetchJSON(`/api/tournaments/${tid}/decklist/${pid}`, { method: "DELETE" });
       setDecklists((d) => d.filter((x) => x.player_id !== pid));
       setViewDeckPid(null);
       setDeckPreview(null);
@@ -1633,7 +1660,15 @@ function AdminDashboard() {
                       })()}
                     </td>
                     <td style={{ textAlign: 'center' }}>
-                      {r.dropped ? (
+                      {!info?.round ? (
+                        <button
+                          onClick={() => removePlayer(r.player_id, r.player)}
+                          className="secondary"
+                          style={{ fontSize: 10, padding: '3px 8px', color: '#ef5350' }}
+                        >
+                          Remove
+                        </button>
+                      ) : r.dropped ? (
                         <button
                           onClick={() => undropPlayer(r.player_id, r.player)}
                           className="secondary"
@@ -1741,7 +1776,12 @@ function AdminDashboard() {
                     <>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
                         <div>
-                          <div style={{ fontFamily: 'Rajdhani, sans-serif', fontWeight: 700, fontSize: 20 }}>{deck.player}</div>
+                          <div style={{ fontFamily: 'Rajdhani, sans-serif', fontWeight: 700, fontSize: 20 }}>
+                            {deck.player}
+                            <span style={{ marginLeft: 10, fontSize: 13, padding: '2px 10px', borderRadius: 999, border: '1px solid rgba(127,224,255,0.6)', color: deck.deck_tag ? '#7fe0ff' : '#86b4e6', verticalAlign: 'middle' }}>
+                              {deck.deck_tag || "Archetype not detected"}
+                            </span>
+                          </div>
                           <div style={{ fontSize: 12, color: '#86b4e6' }}>
                             {count(deck.main)} Main / {count(deck.extra)} Extra / {count(deck.side)} Side
                             {deck.submitted_at ? ` • submitted ${new Date(deck.submitted_at).toLocaleString()}` : ""}
