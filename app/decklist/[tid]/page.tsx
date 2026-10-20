@@ -20,7 +20,7 @@ type Card = {
 type Section = "main" | "extra" | "side";
 type Counts = Record<number, number>;
 type Deck = Record<Section, Counts>;
-type RosterPlayer = { id: string; name: string; submitted: boolean };
+type RosterPlayer = { id: string; name: string; submitted: boolean; can_submit: boolean };
 type Status = { enabled: boolean; registration: boolean; locked: boolean; name: string; players: RosterPlayer[] };
 
 const EMPTY_DECK: Deck = { main: {}, extra: {}, side: {} };
@@ -266,7 +266,8 @@ export default function DecklistPage() {
     );
   }
 
-  if (!status.enabled || status.locked) {
+  const lateOpen = status.locked && status.players.some((p) => p.can_submit && !p.submitted);
+  if (!status.enabled || (status.locked && !lateOpen)) {
     return (
       <div style={{ maxWidth: 520, margin: "0 auto", paddingTop: 60 }}>
         <div className="card">
@@ -301,7 +302,8 @@ export default function DecklistPage() {
   }
 
   if (!started) {
-    const open = status.players.filter((p) => !p.submitted);
+    const roster = status.locked ? status.players.filter((p) => p.can_submit) : status.players;
+    const open = roster.filter((p) => !p.submitted);
 
     const register = async () => {
       setRegistering(true);
@@ -312,7 +314,7 @@ export default function DecklistPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: regName }),
         });
-        setStatus({ ...status, players: [...status.players, { ...res.player, submitted: false }] });
+        setStatus({ ...status, players: [...status.players, { ...res.player, submitted: false, can_submit: true }] });
         setPlayerId(res.player.id);
         setStarted(true);
       } catch (e: any) {
@@ -328,7 +330,13 @@ export default function DecklistPage() {
           <h1>{status.registration ? "Register & Submit Deck" : "GOAT Decklist"}</h1>
           <p style={{ marginBottom: 16, color: "#cbd5e1" }}>{status.name}</p>
 
-          {status.registration && (
+          {status.locked && (
+            <p style={{ color: "#7fe0ff", fontSize: 13, marginBottom: 14 }}>
+              The tournament has started. Late entrants can still submit their decklist below.
+            </p>
+          )}
+
+          {status.registration && !status.locked && (
             <>
               <label>New player? Enter your name</label>
               <input
@@ -347,9 +355,9 @@ export default function DecklistPage() {
             </>
           )}
 
-          {status.players.length > 0 && (
+          {roster.length > 0 && (
             <>
-              {status.registration && (
+              {status.registration && !status.locked && (
                 <p style={{ textAlign: "center", color: "#86b4e6", fontSize: 12, margin: "18px 0 12px" }}>
                   Already registered? Pick your name below.
                 </p>
@@ -357,7 +365,7 @@ export default function DecklistPage() {
               <label>Select your name</label>
               <select value={playerId} onChange={(e) => setPlayerId(e.target.value)}>
                 <option value="">-- choose --</option>
-                {status.players.map((p) => (
+                {roster.map((p) => (
                   <option key={p.id} value={p.id} disabled={p.submitted}>
                     {p.name}
                     {p.submitted ? " (submitted)" : ""}
@@ -375,7 +383,7 @@ export default function DecklistPage() {
 
           <p style={{ color: "#86b4e6", fontSize: 12, marginTop: 14 }}>
             Cards, GOAT banlist and limits are enforced. Once submitted, only the organizer can see or reset your list.
-            {status.registration && " Registration closes when Round 1 is paired."}
+            {status.registration && !status.locked && " Registration closes when Round 1 is paired."}
           </p>
         </div>
       </div>
