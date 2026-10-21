@@ -1,6 +1,6 @@
 # api/index.py
 from __future__ import annotations
-import os, json, random, uuid, time
+import os, sys, json, random, uuid, time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 import hmac
@@ -1515,46 +1515,23 @@ def api_player_stats():
 
 # ── GOAT decklists ───────────────────────────────────────────────────────────
 
-YGOPRODECK_CARDINFO = "https://db.ygoprodeck.com/api/v7/cardinfo.php"
-EXTRA_DECK_TYPES = ("Fusion", "Synchro", "XYZ", "Link")
 GOAT_COPY_LIMITS = {"Forbidden": 0, "Limited": 1, "Semi-Limited": 2}
-_card_search_cache: Dict[str, tuple] = {}
 
-def _slim_card(c: dict) -> dict:
-  ban = (c.get("banlist_info") or {}).get("ban_goat")
-  imgs = c.get("card_images") or [{}]
-  return {
-    "id": c.get("id"),
-    "name": c.get("name"),
-    "type": c.get("type"),
-    "race": c.get("race"),
-    "attribute": c.get("attribute"),
-    "level": c.get("level"),
-    "atk": c.get("atk"),
-    "def": c.get("def"),
-    "desc": c.get("desc"),
-    "ban": ban,
-    "archetype": c.get("archetype"),
-    "extra": any(t in (c.get("type") or "") for t in EXTRA_DECK_TYPES),
-    "img": imgs[0].get("id", c.get("id")),
-  }
+# GOAT card pool: Format Library's list (TCG releases up to SJC Indianapolis,
+# 2005-08-20, April 2005 banlist), snapshotted by scripts/build_goat_pool.py.
+# GOAT is a frozen format, so a bundled snapshot avoids depending on (and being
+# rate-limited by) YGOPRODeck, whose own GOAT filter is missing legal cards.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _goat_cards import CARDS as GOAT_CARDS, ALIASES as GOAT_ALIASES  # noqa: E402
 
-def _goat_cardinfo(params: dict) -> dict:
-  import requests
-  key = json.dumps(params, sort_keys=True)
-  hit = _card_search_cache.get(key)
-  if hit and time.time() - hit[0] < 600:
-    return hit[1]
-  r = requests.get(YGOPRODECK_CARDINFO, params={**params, "format": "goat"}, timeout=10)
-  if r.status_code == 400:
-    data = {"data": [], "meta": {}}  # API answers 400 when nothing matches
-  else:
-    r.raise_for_status()
-    data = r.json()
-  if len(_card_search_cache) > 500:
-    _card_search_cache.clear()
-  _card_search_cache[key] = (time.time(), data)
-  return data
+_goat_pool: Dict[int, dict] = {c["id"]: c for c in GOAT_CARDS}
+
+def _goat_pool_cards() -> Dict[int, dict]:
+  return _goat_pool
+
+def _goat_card_id(cid: int) -> int:
+  # Older drafts and decklists may hold an alternate-artwork id.
+  return GOAT_ALIASES.get(cid, cid)
 
 MONARCHS = {"Zaborg the Thunder Monarch", "Mobius the Frost Monarch", "Thestalos the Firestorm Monarch", "Granmarg the Rock Monarch"}
 
@@ -1590,13 +1567,7 @@ def _detect_goat_archetype(cards: Dict[int, dict], main: Dict[int, int], extra: 
   return None
 
 def _goat_cards_by_id(ids) -> Dict[int, dict]:
-  ids = sorted(set(ids))
-  cards: Dict[int, dict] = {}
-  for i in range(0, len(ids), 40):
-    data = _goat_cardinfo({"id": ",".join(str(x) for x in ids[i:i + 40])})
-    for c in data.get("data", []):
-      cards[c["id"]] = _slim_card(c)
-  return cards
+  return {cid: _goat_pool[_goat_card_id(cid)] for cid in set(ids) if _goat_card_id(cid) in _goat_pool}
 
 def _deck_doc_archetype(tid: str, doc: dict) -> Optional[str]:
   # Older submissions predate detection: compute once and persist on the player's own key.
@@ -1629,17 +1600,22 @@ def _sync_deck_archetypes(tid: str, t: dict) -> bool:
 @app.get("/api/cards/search")
 def api_card_search():
   try:
-    params: Dict[str, object] = {"num": 40, "offset": max(0, int(request.args.get("offset", 0) or 0)), "sort": "name"}
-    for arg, api_key in (("q", "fname"), ("type", "type"), ("attribute", "attribute"), ("race", "race"), ("level", "level")):
-      v = (request.args.get(arg) or "").strip()
-      if v:
-        params[api_key] = v
-    data = _goat_cardinfo(params)
-    meta = data.get("meta") or {}
+    offset = max(0, int(request.args.get("offset", 0) or 0))
+    q = (request.args.get("q") or "").strip().lower()
+    want = {k: (request.args.get(k) or "").strip() for k in ("type", "attribute", "race", "level")}
+    hits = [
+      c for c in GOAT_CARDS
+      if (not q or q in (c["name"] or "").lower())
+      and (not want["type"] or c["type"] == want["type"])
+      and (not want["attribute"] or c["attribute"] == want["attribute"])
+      and (not want["race"] or c["race"] == want["race"])
+      and (not want["level"] or str(c["level"]) == want["level"])
+    ]
+    page = hits[offset:offset + 40]
     resp = jsonify({
-      "cards": [_slim_card(c) for c in data.get("data", [])],
-      "next_offset": meta.get("next_page_offset"),
-      "total": meta.get("total_rows"),
+      "cards": page,
+      "next_offset": offset + 40 if offset + 40 < len(hits) else None,
+      "total": len(hits) or None,
     })
     resp.headers["Cache-Control"] = "public, s-maxage=600"
     return resp
@@ -1710,7 +1686,7 @@ def api_submit_decklist(tid):
     for sec in ("main", "extra", "side"):
       counts: Dict[int, int] = {}
       for entry in body.get(sec) or []:
-        cid, qty = int(entry["id"]), int(entry["qty"])
+        cid, qty = _goat_card_id(int(entry["id"])), int(entry["qty"])
         if qty < 1 or qty > 3:
           return jsonify({"error": "Invalid card quantity."}), 400
         counts[cid] = counts.get(cid, 0) + qty
