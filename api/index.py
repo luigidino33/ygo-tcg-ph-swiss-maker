@@ -1,11 +1,11 @@
 # api/index.py
 from __future__ import annotations
-import os, sys, json, random, uuid, time
+import os, sys, re, json, random, uuid, time, hashlib, secrets
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 import hmac
 from functools import wraps
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, g
 
 app = Flask(__name__)
 
@@ -21,6 +21,96 @@ def admin_required(fn):
       return jsonify({"error": "Admin password required."}), 401
     return fn(*args, **kwargs)
   return wrapper
+
+# ── Player accounts ──────────────────────────────────────────────────────────
+# Username + password accounts that own a player name. Ownership is global and
+# derived from the name, so it also covers tournaments created before the account.
+
+USERNAME_RE = re.compile(r"^[a-z0-9_-]{3,20}$")
+SESSION_COOKIE = "ygo_session"
+SESSION_TTL = 30 * 86400
+LOGIN_MAX_FAILS = 10
+LOGIN_LOCK_SECONDS = 15 * 60
+
+def user_key(username: str) -> str:
+  return f"user_{username}"
+
+def claim_key(player_name: str) -> str:
+  # Hashed: player names can contain characters that aren't safe in KV REST paths.
+  return "claim_" + hashlib.sha256(" ".join(player_name.split()).lower().encode()).hexdigest()[:32]
+
+def hash_password(pw: str) -> str:
+  salt = os.urandom(16)
+  dk = hashlib.scrypt(pw.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+  return f"scrypt${salt.hex()}${dk.hex()}"
+
+def check_password(pw: str, stored: str) -> bool:
+  try:
+    _, salt, digest = stored.split("$")
+    dk = hashlib.scrypt(pw.encode(), salt=bytes.fromhex(salt), n=2 ** 14, r=8, p=1, dklen=32)
+    return hmac.compare_digest(dk.hex(), digest)
+  except Exception:
+    return False
+
+_DUMMY_HASH = None
+
+def _burn_password_check(pw: str) -> None:
+  # Same work as a real check, so a missing username takes as long as a wrong password.
+  global _DUMMY_HASH
+  if _DUMMY_HASH is None:
+    _DUMMY_HASH = hash_password("dummy-password")
+  check_password(pw, _DUMMY_HASH)
+
+def _session_secret() -> bytes:
+  explicit = os.environ.get("SESSION_SECRET")
+  if explicit:
+    return explicit.encode()
+  # Derived from the KV token, which is already a server-only secret.
+  return hmac.new(_kv_token().encode(), b"ygo-player-session", hashlib.sha256).digest()
+
+def _session_token(username: str, pw_ver: int) -> str:
+  payload = f"{username}.{pw_ver}.{int(time.time()) + SESSION_TTL}"
+  sig = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
+  return f"{payload}.{sig}"
+
+def current_user() -> Optional[dict]:
+  if "current_user" in g:
+    return g.current_user
+  g.current_user = None
+  token = request.cookies.get(SESSION_COOKIE, "")
+  parts = token.split(".")
+  if len(parts) == 4:
+    username, ver, exp, sig = parts
+    expected = hmac.new(_session_secret(), f"{username}.{ver}.{exp}".encode(), hashlib.sha256).hexdigest()
+    if hmac.compare_digest(sig, expected) and exp.isdigit() and int(exp) > time.time():
+      doc = kv_get_json(user_key(username))
+      # pw_ver changes on password reset, which signs out every existing session.
+      if doc and str(doc.get("pw_ver")) == ver:
+        g.current_user = doc
+  return g.current_user
+
+def public_user(doc: Optional[dict]) -> Optional[dict]:
+  return {"username": doc["username"], "player_name": doc["player_name"]} if doc else None
+
+def _is_https() -> bool:
+  return request.is_secure or request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https"
+
+def _with_session(resp, doc: dict):
+  resp.set_cookie(SESSION_COOKIE, _session_token(doc["username"], doc["pw_ver"]), max_age=SESSION_TTL,
+                  httponly=True, samesite="Lax", secure=_is_https(), path="/")
+  return resp
+
+def name_owners(names: List[str]) -> Dict[str, str]:
+  # lowercase player name -> owning username, for names that belong to an account.
+  uniq = sorted({" ".join(n.split()).lower() for n in names if n})
+  out = {}
+  for name, claim in zip(uniq, kv_mget_json([claim_key(n) for n in uniq])):
+    if isinstance(claim, dict) and claim.get("username"):
+      out[name] = claim["username"]
+  return out
+
+def name_owner(name: str) -> Optional[str]:
+  return name_owners([name]).get(" ".join(name.split()).lower())
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Vercel KV (Upstash Redis) REST helpers
@@ -90,6 +180,33 @@ def kv_cas_json(key: str, expected_raw: str, value) -> bool:
   if r.status_code >= 400:
     raise RuntimeError(f"KV CAS failed ({r.status_code}): {r.text}")
   return r.json().get("result") == 1
+
+def _kv_command(*args):
+  import requests
+  r = requests.post(_kv_url(), json=[str(a) for a in args], headers={"Authorization": f"Bearer {_kv_token()}"}, timeout=10)
+  if r.status_code >= 400:
+    raise RuntimeError(f"KV command failed ({r.status_code}): {r.text}")
+  return r.json().get("result")
+
+_SETNX_SCRIPT = "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1]) return 1 else return 0 end"
+_INCR_TTL_SCRIPT = "local v = redis.call('INCR', KEYS[1]) if v == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end return v"
+
+def kv_set_nx_json(key: str, value) -> bool:
+  return _kv_command("EVAL", _SETNX_SCRIPT, 1, key, json.dumps(value, separators=(",", ":"))) == 1
+
+def kv_incr_ttl(key: str, ttl: int) -> int:
+  return int(_kv_command("EVAL", _INCR_TTL_SCRIPT, 1, key, ttl))
+
+def kv_mget_json(keys: List[str]) -> List[object]:
+  if not keys:
+    return []
+  out = []
+  for raw in _kv_command("MGET", *keys) or []:
+    try:
+      out.append(json.loads(raw) if raw is not None else None)
+    except Exception:
+      out.append(raw)
+  return out
 
 def kv_del(key: str) -> None:
   import requests
@@ -205,11 +322,43 @@ def decks_key(tid: str, pid: str = "") -> str:
 def read_tdoc_or_retry(tid: str, attempts: int = 6, delay: float = 0.2):
   key = tid_key(tid)
   for _ in range(attempts):
-    doc = kv_get_json(key)
-    if doc is not None:
-      return doc
+    raw = kv_get_raw(key)
+    if raw is not None:
+      seen = getattr(g, "tdoc_raw", None)
+      if seen is not None:
+        seen[key] = raw
+      return json.loads(raw)
     time.sleep(delay)
   return None
+
+class TdocConflict(BaseException):
+  # BaseException on purpose: handlers end in a broad `except Exception`, and this
+  # must get past them to retry_on_conflict.
+  pass
+
+def save_tdoc(tid: str, t: dict) -> None:
+  # Write only if the doc is unchanged since this request read it; otherwise the
+  # whole handler is re-run on fresh data by retry_on_conflict.
+  key = tid_key(tid)
+  seen = getattr(g, "tdoc_raw", None)
+  if seen is None or key not in seen:
+    kv_set_json(key, t)
+    return
+  if not kv_cas_json(key, seen[key], t):
+    raise TdocConflict()
+  seen[key] = json.dumps(t, separators=(",", ":"))
+
+def retry_on_conflict(fn):
+  @wraps(fn)
+  def wrapper(*args, **kwargs):
+    for attempt in range(20):
+      g.tdoc_raw = {}
+      try:
+        return fn(*args, **kwargs)
+      except TdocConflict:
+        time.sleep(random.uniform(0, 0.03 * 2 ** min(attempt, 5)))
+    return jsonify({"error": "Lots of people are updating this tournament right now. Please try again."}), 503
+  return wrapper
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tournament model + KTS tie-breakers
@@ -739,6 +888,7 @@ def get_tournament(tid):
 
 @app.post("/api/tournaments/<tid>/edit-result")
 @admin_required
+@retry_on_conflict
 def api_edit_result(tid):
   try:
     body = request.get_json(silent=True) or {}
@@ -779,7 +929,7 @@ def api_edit_result(tid):
       elif "score" in found and res == "PENDING":
         found.pop("score", None)
 
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
 
     id2name = {p["id"]: p["name"] for p in t.get("players", []) if "id" in p and "name" in p}
     rsp = {
@@ -851,6 +1001,7 @@ def api_pair_next(tid):
 
 @app.post("/api/tournaments/<tid>/finalize-round")
 @admin_required
+@retry_on_conflict
 def api_finalize_round(tid):
   try:
     data = request.get_json(force=True)
@@ -876,13 +1027,14 @@ def api_finalize_round(tid):
         if score and isinstance(score, list) and len(score) == 2:
           by_id[mid]["score"] = score
 
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
     return jsonify({"ok": True, "standings": compute_standings(t)})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/edit-pairings")
 @admin_required
+@retry_on_conflict
 def api_edit_pairings(tid):
   """
   Admin: overwrite the current round's pairings (structure) before results.
@@ -950,7 +1102,7 @@ def api_edit_pairings(tid):
       m["t"] = i
 
     last["matches"] = new_matches
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
 
     return jsonify({"pairs": pairs_for_ui(t)})
   except Exception as e:
@@ -958,6 +1110,7 @@ def api_edit_pairings(tid):
 
 @app.post("/api/tournaments/<tid>/restart-round")
 @admin_required
+@retry_on_conflict
 def api_restart_round(tid):
   """
   Recompute pairings for the current round (same round number), before results.
@@ -984,7 +1137,7 @@ def api_restart_round(tid):
     # Keep the same round index number as last
     last["n"] = last.get("n", new_round_no)
     last["matches"] = matches
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
 
     return jsonify({"ok": True, "round": last["n"], "pairs": pairs_for_ui(t)})
   except Exception as e:
@@ -1017,13 +1170,24 @@ def _update_index_count(tid: str, count: int) -> None:
 def api_register(tid):
   # Public self-registration for tournaments with registration enabled; closes at Round 1.
   try:
-    name = (request.get_json(force=True) or {}).get("name") or ""
+    user = current_user()
+    name = " ".join(((request.get_json(force=True) or {}).get("name") or "").split())
+    if not name and user:
+      name = user["player_name"]
+    owner = name_owner(name) if name else None
+    if owner and (not user or user["username"] != owner):
+      return jsonify({"error": f"'{name}' belongs to a player account. Log in to register as {name}."}), 403
 
     def mutate(t):
       if not t.get("registration"):
         raise Reject({"error": "Registration is not open for this tournament."})
       if t.get("rounds"):
         raise Reject({"error": "Registration is closed (the tournament has started)."})
+      if owner:
+        # The account owner may already be on the roster (e.g. added by the organizer).
+        existing = next((p for p in t.get("players", []) if p["name"].strip().lower() == name.lower()), None)
+        if existing:
+          return existing
       return _append_player(t, name)
 
     res = update_tdoc(tid, mutate)
@@ -1039,6 +1203,7 @@ def api_register(tid):
 
 @app.post("/api/tournaments/<tid>/set-rounds")
 @admin_required
+@retry_on_conflict
 def api_set_rounds(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1054,7 +1219,7 @@ def api_set_rounds(tid):
       note = f" (Round {played} has already been paired)" if played else ""
       return jsonify({"error": f"Rounds must be between {max(1, played)} and 20{note}."}), 400
     t["total_rounds"] = total
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
     return jsonify({"ok": True, "total_rounds": total})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -1108,6 +1273,7 @@ def api_remove_player(tid):
 
 @app.post("/api/tournaments/<tid>/drop-player")
 @admin_required
+@retry_on_conflict
 def api_drop_player(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1129,7 +1295,7 @@ def api_drop_player(tid):
 
     dropped.append(pid)
     t["dropped"] = dropped
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
 
     name = next((p["name"] for p in t["players"] if p["id"] == pid), pid)
     return jsonify({"ok": True, "message": f"{name} has been dropped.", "standings": compute_standings(t)})
@@ -1138,6 +1304,7 @@ def api_drop_player(tid):
 
 @app.post("/api/tournaments/<tid>/undrop-player")
 @admin_required
+@retry_on_conflict
 def api_undrop_player(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1155,7 +1322,7 @@ def api_undrop_player(tid):
 
     dropped.remove(pid)
     t["dropped"] = dropped
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
 
     name = next((p["name"] for p in t["players"] if p["id"] == pid), pid)
     return jsonify({"ok": True, "message": f"{name} has been reinstated.", "standings": compute_standings(t)})
@@ -1164,6 +1331,7 @@ def api_undrop_player(tid):
 
 @app.post("/api/tournaments/<tid>/undo-finalize")
 @admin_required
+@retry_on_conflict
 def api_undo_finalize(tid):
   try:
     t = read_tdoc_or_retry(tid)
@@ -1184,13 +1352,14 @@ def api_undo_finalize(tid):
         m["r"] = "PENDING"
         m.pop("score", None)
 
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
     return jsonify({"ok": True, "round": last["n"], "pairs": pairs_for_ui(t), "standings": compute_standings(t)})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
 @app.post("/api/tournaments/<tid>/revert-round")
 @admin_required
+@retry_on_conflict
 def api_revert_round(tid):
   # Drop the latest round entirely (pairings + results) so the previous round,
   # with its results intact, becomes current again and can be corrected.
@@ -1203,7 +1372,7 @@ def api_revert_round(tid):
       return jsonify({"error": "No previous round to revert to."}), 400
 
     removed = rounds.pop()
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
     return jsonify({
       "ok": True,
       "removed_round": removed.get("n"),
@@ -1330,6 +1499,7 @@ def api_archetype_images_batch():
 
 @app.post("/api/tournaments/<tid>/set-deck")
 @admin_required
+@retry_on_conflict
 def api_set_deck(tid):
   try:
     body = request.get_json(force=True) or {}
@@ -1358,7 +1528,7 @@ def api_set_deck(tid):
     if not found:
       return jsonify({"error": "Unknown player_id"}), 400
 
-    kv_set_json(tid_key(tid), t)
+    save_tdoc(tid, t)
     return jsonify({"ok": True, "archetypes": archetypes})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
@@ -1622,6 +1792,16 @@ def api_card_search():
   except Exception as e:
     return jsonify({"error": str(e)}), 502
 
+@app.get("/api/cards/by-ids")
+def api_cards_by_ids():
+  try:
+    ids = [int(x) for x in (request.args.get("ids") or "").split(",") if x.strip().isdigit()][:200]
+    resp = jsonify({"cards": list(_goat_cards_by_id(ids).values())})
+    resp.headers["Cache-Control"] = "public, s-maxage=86400"
+    return resp
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 @app.get("/api/card-image/<int:cid>")
 def api_card_image(cid):
   # Proxied + edge-cached so we don't hotlink images.ygoprodeck.com on every view.
@@ -1644,6 +1824,66 @@ def _can_submit_deck(t: dict, player: dict) -> bool:
   # Submission closes at Round 1, except for late entrants added after it started.
   return not _decklist_locked(t) or bool(player.get("joined_round"))
 
+def _can_edit_deck(t: dict, player: dict) -> bool:
+  # Edits are allowed until the player's first round is paired: Round 1 for everyone,
+  # or the round after they joined for late entrants.
+  return not _decklist_locked(t) or (bool(player.get("joined_round")) and current_round_number(t) == player["joined_round"])
+
+def _edit_hash(token: str) -> str:
+  return hashlib.sha256(token.encode()).hexdigest()
+
+def _validate_goat_deck(body: dict, complete: bool = True):
+  # Returns (sections, cards). complete=False allows unfinished decks (saved decks).
+  sections: Dict[str, Dict[int, int]] = {}
+  for sec in ("main", "extra", "side"):
+    counts: Dict[int, int] = {}
+    for entry in body.get(sec) or []:
+      cid, qty = _goat_card_id(int(entry["id"])), int(entry["qty"])
+      if qty < 1 or qty > 3:
+        raise Reject({"error": "Invalid card quantity."})
+      counts[cid] = counts.get(cid, 0) + qty
+    sections[sec] = counts
+  main_n, extra_n, side_n = (sum(sections[s].values()) for s in ("main", "extra", "side"))
+  if complete and main_n < 40:
+    raise Reject({"error": f"Main Deck must have 40-60 cards (has {main_n})."})
+  if main_n > 60:
+    raise Reject({"error": f"Main Deck must have 40-60 cards (has {main_n})."})
+  if extra_n > 15:
+    raise Reject({"error": f"Extra Deck can have at most 15 cards (has {extra_n})."})
+  if side_n > 15:
+    raise Reject({"error": f"Side Deck can have at most 15 cards (has {side_n})."})
+  totals: Dict[int, int] = {}
+  for counts in sections.values():
+    for cid, q in counts.items():
+      totals[cid] = totals.get(cid, 0) + q
+  # Verify every card against the GOAT card pool and banlist server-side.
+  cards = _goat_cards_by_id(totals)
+  for cid, total in totals.items():
+    c = cards.get(cid)
+    if not c:
+      raise Reject({"error": f"Card {cid} is not legal in GOAT format."})
+    limit = GOAT_COPY_LIMITS.get(c["ban"], 3)
+    if total > limit:
+      raise Reject({"error": f"{c['name']}: max {limit} copies allowed (has {total})."})
+  for cid in sections["main"]:
+    if cards[cid]["extra"]:
+      raise Reject({"error": f"{cards[cid]['name']} belongs in the Extra Deck."})
+  for cid in sections["extra"]:
+    if not cards[cid]["extra"]:
+      raise Reject({"error": f"{cards[cid]['name']} cannot go in the Extra Deck."})
+  return sections, cards
+
+def _deck_entries(sections: Dict[str, Dict[int, int]], cards: Dict[int, dict]) -> dict:
+  return {sec: [{"id": cid, "name": cards[cid]["name"], "qty": q, "type": cards[cid]["type"], "ban": cards[cid]["ban"]}
+                for cid, q in counts.items()] for sec, counts in sections.items()}
+
+def _may_edit_submission(doc: dict, player: dict, token: str) -> bool:
+  # The owning account, or the device that submitted it (holds the edit token).
+  owner = name_owner(player["name"])
+  if owner:
+    return (current_user() or {}).get("username") == owner
+  return bool(token) and bool(doc.get("edit_hash")) and hmac.compare_digest(_edit_hash(token), doc["edit_hash"])
+
 @app.get("/api/tournaments/<tid>/decklist-status")
 def api_decklist_status(tid):
   try:
@@ -1652,14 +1892,24 @@ def api_decklist_status(tid):
       return jsonify({"error": "not found"}), 404
     prefix = decks_key(tid)
     submitted = {k[len(prefix):] for k in kv_keys(f"{prefix}*")}
-    return jsonify({
+    players = t.get("players", [])
+    owners = name_owners([p["name"] for p in players])
+    me = (current_user() or {}).get("username")
+    rows = []
+    for p in players:
+      owner = owners.get(p["name"].strip().lower())
+      rows.append({"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted,
+                   "can_submit": _can_submit_deck(t, p), "can_edit": _can_edit_deck(t, p),
+                   "claimed": bool(owner), "mine": bool(owner and owner == me)})
+    resp = jsonify({
       "enabled": bool(t.get("decklists")),
       "registration": bool(t.get("registration")),
       "locked": _decklist_locked(t),
       "name": t["name"],
-      "players": [{"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted, "can_submit": _can_submit_deck(t, p)}
-                  for p in t.get("players", [])],
+      "players": rows,
     })
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
@@ -1678,66 +1928,64 @@ def api_submit_decklist(tid):
       return jsonify({"error": "Unknown player."}), 400
     if not _can_submit_deck(t, player):
       return jsonify({"error": "Decklist submission is closed (the tournament has started)."}), 400
-    if kv_get_json(decks_key(tid, pid)) is not None:
-      return jsonify({"error": "A decklist was already submitted for this player. Ask the organizer to reset it."}), 409
-
-    # Normalise client input to {section: {card_id: qty}}
-    sections: Dict[str, Dict[int, int]] = {}
-    for sec in ("main", "extra", "side"):
-      counts: Dict[int, int] = {}
-      for entry in body.get(sec) or []:
-        cid, qty = _goat_card_id(int(entry["id"])), int(entry["qty"])
-        if qty < 1 or qty > 3:
-          return jsonify({"error": "Invalid card quantity."}), 400
-        counts[cid] = counts.get(cid, 0) + qty
-      sections[sec] = counts
-
-    main_n, extra_n, side_n = (sum(sections[s].values()) for s in ("main", "extra", "side"))
-    if not 40 <= main_n <= 60:
-      return jsonify({"error": f"Main Deck must have 40-60 cards (has {main_n})."}), 400
-    if extra_n > 15:
-      return jsonify({"error": f"Extra Deck can have at most 15 cards (has {extra_n})."}), 400
-    if side_n > 15:
-      return jsonify({"error": f"Side Deck can have at most 15 cards (has {side_n})."}), 400
-
-    totals: Dict[int, int] = {}
-    for counts in sections.values():
-      for cid, q in counts.items():
-        totals[cid] = totals.get(cid, 0) + q
-
-    # Verify every card against the GOAT card pool and banlist server-side.
-    cards = _goat_cards_by_id(totals)
-    for cid, total in totals.items():
-      c = cards.get(cid)
-      if not c:
-        return jsonify({"error": f"Card {cid} is not legal in GOAT format."}), 400
-      limit = GOAT_COPY_LIMITS.get(c["ban"], 3)
-      if total > limit:
-        return jsonify({"error": f"{c['name']}: max {limit} copies allowed (has {total})."}), 400
-    for cid in sections["main"]:
-      if cards[cid]["extra"]:
-        return jsonify({"error": f"{cards[cid]['name']} belongs in the Extra Deck."}), 400
-    for cid in sections["extra"]:
-      if not cards[cid]["extra"]:
-        return jsonify({"error": f"{cards[cid]['name']} cannot go in the Extra Deck."}), 400
-
+    owner = name_owner(player["name"])
+    if owner and (current_user() or {}).get("username") != owner:
+      return jsonify({"error": f"'{player['name']}' belongs to a player account. Log in as that player to submit this decklist."}), 403
+    sections, cards = _validate_goat_deck(body)
+    key = decks_key(tid, pid)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     doc = {
       "player_id": pid,
       "player": player["name"],
-      "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+      "submitted_at": now,
       "archetype": _detect_goat_archetype(cards, sections["main"], sections["extra"]),
-      **{sec: [{"id": cid, "name": cards[cid]["name"], "qty": q, "type": cards[cid]["type"], "ban": cards[cid]["ban"]} for cid, q in counts.items()]
-         for sec, counts in sections.items()},
+      **_deck_entries(sections, cards),
     }
-    kv_set_json(decks_key(tid, pid), doc)
-    return jsonify({"ok": True})
+    token = secrets.token_urlsafe(24)
+    if kv_set_nx_json(key, {**doc, "edit_hash": _edit_hash(token)}):
+      return jsonify({"ok": True, "edit_token": token})
+
+    existing = kv_get_json(key) or {}
+    given = body.get("edit_token") or ""
+    if not _may_edit_submission(existing, player, given):
+      return jsonify({"error": "A decklist was already submitted for this player. Ask the organizer to reset it."}), 409
+    if not _can_edit_deck(t, player):
+      return jsonify({"error": "Decklists can't be changed once your first round has been paired. Ask the organizer."}), 409
+    doc["submitted_at"] = existing.get("submitted_at", now)
+    doc["updated_at"] = now
+    if existing.get("edit_hash"):
+      doc["edit_hash"] = existing["edit_hash"]
+    kv_set_json(key, doc)
+    return jsonify({"ok": True, "updated": True, "edit_token": given or None})
+
+  except Reject as e:
+    return reject_response(e)
   except (KeyError, TypeError, ValueError):
     return jsonify({"error": "Malformed decklist."}), 400
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+@app.post("/api/tournaments/<tid>/my-decklist")
+def api_my_decklist(tid):
+  # The submitted list for the owner/submitting device, so it can be edited. POST keeps the token out of URLs.
+  try:
+    body = request.get_json(force=True) or {}
+    pid = body.get("player_id")
+    t = read_tdoc_or_retry(tid)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    player = next((p for p in t.get("players", []) if p["id"] == pid), None)
+    doc = kv_get_json(decks_key(tid, pid)) if player else None
+    if not doc or not _may_edit_submission(doc, player, body.get("edit_token") or ""):
+      return jsonify({"error": "Decklist not found."}), 404
+    return jsonify({"deck": {s: [{"id": e["id"], "qty": e["qty"]} for e in doc.get(s, [])] for s in ("main", "extra", "side")},
+                    "can_edit": _can_edit_deck(t, player), "submitted_at": doc.get("submitted_at"), "updated_at": doc.get("updated_at")})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
 @app.get("/api/tournaments/<tid>/decklists")
 @admin_required
+@retry_on_conflict
 def api_get_decklists(tid):
   # Admin-only: decklists are never exposed through any public endpoint.
   try:
@@ -1745,7 +1993,7 @@ def api_get_decklists(tid):
     if not t:
       return jsonify({"error": "not found"}), 404
     if t.get("rounds") and _sync_deck_archetypes(tid, t):
-      kv_set_json(tid_key(tid), t)
+      save_tdoc(tid, t)
     prefix = decks_key(tid)
     docs = [d for d in (kv_get_json(k) for k in kv_keys(f"{prefix}*")) if d]
     for d in docs:
@@ -1753,6 +2001,7 @@ def api_get_decklists(tid):
     tags = {p["id"]: p.get("deck") for p in t.get("players", []) if p.get("deck") and not p.get("deck_auto")}
     for d in docs:
       d["deck_tag"] = tags.get(d["player_id"]) or d.get("archetype")
+      d.pop("edit_hash", None)
     docs.sort(key=lambda d: (d.get("player") or "").lower())
     return jsonify({"decklists": docs})
   except Exception as e:
@@ -1780,6 +2029,217 @@ def api_admin_auth():
     if hmac.compare_digest(password.encode(), admin_pw.encode()):
       return jsonify({"ok": True})
     return jsonify({"ok": False, "message": "Incorrect password."}), 401
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+# ── Player account endpoints ─────────────────────────────────────────────────
+
+@app.post("/api/auth/register")
+def api_auth_register():
+  try:
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip().lower()
+    password = body.get("password") or ""
+    player_name = " ".join((body.get("player_name") or "").split())
+    if not USERNAME_RE.match(username):
+      return jsonify({"error": "Username must be 3-20 characters: letters, numbers, _ or -."}), 400
+    if not 8 <= len(password) <= 128:
+      return jsonify({"error": "Password must be at least 8 characters."}), 400
+    if not player_name or len(player_name) > MAX_NAME_LEN:
+      return jsonify({"error": f"Player name is required (max {MAX_NAME_LEN} characters)."}), 400
+
+    doc = {"username": username, "player_name": player_name, "pw": hash_password(password), "pw_ver": 1,
+           "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if not kv_set_nx_json(user_key(username), doc):
+      return jsonify({"error": "That username is taken."}), 409
+    if not kv_set_nx_json(claim_key(player_name), {"username": username, "name": player_name}):
+      kv_del(user_key(username))
+      return jsonify({"error": f"The player name '{player_name}' already belongs to another account. "
+                               "Ask the organizer if it's yours."}), 409
+    return _with_session(jsonify({"ok": True, "user": public_user(doc)}), doc)
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/auth/login")
+def api_auth_login():
+  try:
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip().lower()
+    password = body.get("password") or ""
+    if not USERNAME_RE.match(username):
+      _burn_password_check(password)
+      return jsonify({"error": "Incorrect username or password."}), 401
+    fails_key = f"loginfail_{username}"
+    if int(kv_get_json(fails_key) or 0) >= LOGIN_MAX_FAILS:
+      return jsonify({"error": "Too many failed attempts. Try again in 15 minutes."}), 429
+    doc = kv_get_json(user_key(username))
+    if not doc:
+      _burn_password_check(password)
+    if not doc or not check_password(password, doc.get("pw", "")):
+      kv_incr_ttl(fails_key, LOGIN_LOCK_SECONDS)
+      return jsonify({"error": "Incorrect username or password."}), 401
+    kv_del(fails_key)
+    return _with_session(jsonify({"ok": True, "user": public_user(doc)}), doc)
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/auth/logout")
+def api_auth_logout():
+  resp = jsonify({"ok": True})
+  resp.delete_cookie(SESSION_COOKIE, path="/")
+  return resp
+
+@app.get("/api/auth/me")
+def api_auth_me():
+  try:
+    resp = jsonify({"user": public_user(current_user())})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+MAX_SAVED_DECKS = 30
+
+def saved_decks_key(username: str) -> str:
+  return f"udecks_{username}"
+
+def _login_required():
+  user = current_user()
+  if not user:
+    raise Reject({"error": "Log in to use saved decks."}, 401)
+  return user
+
+@app.get("/api/me/decks")
+def api_my_saved_decks():
+  try:
+    user = _login_required()
+    resp = jsonify({"decks": (kv_get_json(saved_decks_key(user["username"])) or {}).get("decks", [])})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+  except Reject as e:
+    return reject_response(e)
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/me/decks")
+def api_save_deck():
+  try:
+    user = _login_required()
+    body = request.get_json(force=True) or {}
+    name = " ".join((body.get("name") or "").split())[:60]
+    if not name:
+      return jsonify({"error": "Give the deck a name."}), 400
+    sections, cards = _validate_goat_deck(body, complete=False)
+    key = saved_decks_key(user["username"])
+    decks = (kv_get_json(key) or {}).get("decks", [])
+    entry = {"id": body.get("id") or new_id("d"), "name": name,
+             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+             **{s: [{"id": cid, "qty": q} for cid, q in sections[s].items()] for s in ("main", "extra", "side")}}
+    idx = next((i for i, d in enumerate(decks) if d["id"] == entry["id"]), None)
+    if idx is None:
+      if len(decks) >= MAX_SAVED_DECKS:
+        return jsonify({"error": f"You can save up to {MAX_SAVED_DECKS} decks. Delete one first."}), 400
+      decks.append(entry)
+    else:
+      decks[idx] = entry
+    decks.sort(key=lambda d: d["updated_at"], reverse=True)
+    kv_set_json(key, {"decks": decks})
+    return jsonify({"ok": True, "deck": entry})
+  except Reject as e:
+    return reject_response(e)
+  except (KeyError, TypeError, ValueError):
+    return jsonify({"error": "Malformed decklist."}), 400
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.delete("/api/me/decks/<deck_id>")
+def api_delete_saved_deck(deck_id):
+  try:
+    user = _login_required()
+    key = saved_decks_key(user["username"])
+    decks = (kv_get_json(key) or {}).get("decks", [])
+    kv_set_json(key, {"decks": [d for d in decks if d["id"] != deck_id]})
+    return jsonify({"ok": True})
+  except Reject as e:
+    return reject_response(e)
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.get("/api/admin/accounts")
+@admin_required
+def api_admin_accounts():
+  try:
+    docs = [d for d in kv_mget_json(kv_keys("user_*")) if isinstance(d, dict)]
+    docs.sort(key=lambda d: d["username"])
+    return jsonify({"accounts": [{"username": d["username"], "player_name": d["player_name"],
+                                  "created_at": d.get("created_at", "")} for d in docs]})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/admin/accounts/reset-password")
+@admin_required
+def api_admin_reset_password():
+  try:
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip().lower()
+    password = body.get("password") or ""
+    if not 8 <= len(password) <= 128:
+      return jsonify({"error": "Password must be at least 8 characters."}), 400
+    doc = kv_get_json(user_key(username))
+    if not doc:
+      return jsonify({"error": "No account with that username."}), 404
+    doc["pw"] = hash_password(password)
+    doc["pw_ver"] = int(doc.get("pw_ver", 1)) + 1
+    kv_set_json(user_key(username), doc)
+    kv_del(f"loginfail_{username}")
+    return jsonify({"ok": True})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.post("/api/admin/accounts/rename")
+@admin_required
+def api_admin_rename_account():
+  # Moves an account to a different player name and frees the old one.
+  try:
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip().lower()
+    new_name = " ".join((body.get("player_name") or "").split())
+    if not new_name or len(new_name) > MAX_NAME_LEN:
+      return jsonify({"error": f"Player name is required (max {MAX_NAME_LEN} characters)."}), 400
+    doc = kv_get_json(user_key(username))
+    if not doc:
+      return jsonify({"error": "No account with that username."}), 404
+    old_key, new_key = claim_key(doc["player_name"]), claim_key(new_name)
+    claim = {"username": username, "name": new_name}
+    if new_key == old_key:
+      kv_set_json(new_key, claim)  # capitalisation/spacing fix of the same name
+    elif not kv_set_nx_json(new_key, claim):
+      owner = (kv_get_json(new_key) or {}).get("username", "another account")
+      return jsonify({"error": f"'{new_name}' already belongs to @{owner}. Change or delete that account first."}), 409
+    else:
+      kv_del(old_key)
+    doc["player_name"] = new_name
+    kv_set_json(user_key(username), doc)
+    return jsonify({"ok": True, "account": {"username": username, "player_name": new_name, "created_at": doc.get("created_at", "")}})
+  except Exception as e:
+    return jsonify({"error": str(e)}), 500
+
+@app.delete("/api/admin/accounts/<username>")
+@admin_required
+def api_admin_delete_account(username):
+  # Deletes the account and frees its player name. Tournament history is untouched.
+  try:
+    username = username.strip().lower()
+    doc = kv_get_json(user_key(username))
+    if not doc:
+      return jsonify({"error": "No account with that username."}), 404
+    claim = kv_get_json(claim_key(doc["player_name"])) or {}
+    if claim.get("username") == username:
+      kv_del(claim_key(doc["player_name"]))
+    kv_del(user_key(username))
+    kv_del(f"loginfail_{username}")
+    kv_del(saved_decks_key(username))
+    return jsonify({"ok": True})
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
