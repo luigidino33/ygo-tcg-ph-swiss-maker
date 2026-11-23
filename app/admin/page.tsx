@@ -1029,7 +1029,7 @@ function AdminDashboard() {
                   onChange={(e) => setOpenRegistration(e.target.checked)}
                   style={{ width: 'auto', margin: 0 }}
                 />
-                Players can register themselves via the link (you can start with 0 players)
+                Players can register themselves via the link with their player account (you can start with 0 players)
               </label>
             )}
           </div>
@@ -1478,7 +1478,7 @@ function AdminDashboard() {
           <h2>{info.round ? "🏆 Current Standings" : `👥 Players (${players.length})`}</h2>
           {!info.round && info.registration && (
             <p style={{ fontSize: 13, color: '#7fe0ff', marginBottom: 12 }}>
-              Registration is open. Share the Registration Link; new players appear here automatically and registration closes when you pair Round 1.
+              Registration is open. Share the Registration Link; players log in with their account, appear here automatically, and registration closes when you pair Round 1. Players you add yourself submit decks by logging in with an account under the same name.
             </p>
           )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
