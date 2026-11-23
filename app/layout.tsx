@@ -1,3 +1,5 @@
+import AccountChip from "./AccountChip";
+
 export const metadata = { title: "YGO TCG PH Tournament App" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -82,6 +84,27 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             background: linear-gradient(180deg, #0a3a78, #041a3c);
             clip-path: polygon(19px 0, calc(100% - 19px) 0, 100% 50%, calc(100% - 19px) 100%, 19px 100%, 0 50%);
           }
+
+          /* Account chip in the header */
+          .nv-header { position: relative; }
+          .nv-account { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); z-index: 50; }
+          .nv-account-btn {
+            display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            padding: 6px 18px; font-size: 14px; text-decoration: none; color: #fff; font-family: var(--font-ui); font-weight: 700;
+            background: rgba(4, 22, 52, 0.85); border: 1px solid var(--line); border-radius: 999px; clip-path: none;
+          }
+          .nv-account-btn::before { display: none; }
+          .nv-account-menu {
+            position: absolute; right: 0; top: calc(100% + 8px); min-width: 170px; padding: 8px;
+            background: linear-gradient(180deg, #0d3a72, #051a3c); border: 1px solid var(--line); border-top: 2px solid var(--cyan);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+          }
+          .nv-account-menu a, .nv-account-menu button {
+            display: block; width: 100%; text-align: left; padding: 8px 10px; font-size: 14px; color: var(--text);
+            text-decoration: none; background: none; clip-path: none; text-shadow: none; letter-spacing: 0; font-weight: 600;
+          }
+          .nv-account-menu button::before { display: none; }
+          .nv-account-menu a:hover, .nv-account-menu button:hover { background: rgba(70, 160, 255, 0.18); filter: none; }
 
           /* Panels */
           .card {
@@ -487,6 +510,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             body { font-size: 14px; }
             .nv-header { height: 58px; margin-bottom: 14px; }
             .nv-badge { width: 160px; height: 44px; font-size: 17px; }
+            .nv-account { right: 8px; }
+            .nv-account-btn { max-width: 88px; padding: 5px 12px; font-size: 13px; }
             .card { padding: 14px; margin-bottom: 16px; }
             h1 { font-size: 22px; letter-spacing: 2px; }
             h2 { font-size: 18px; letter-spacing: 1.5px; }
@@ -517,11 +542,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             th { font-size: 10px; }
             .card { padding: 12px; margin-bottom: 12px; }
           }
-`}} />
+
+          @media (max-width: 400px) {
+            .nv-badge { width: 128px; height: 40px; font-size: 15px; letter-spacing: 2px; }
+            .nv-account-btn { max-width: 74px; padding: 4px 10px; font-size: 12px; }
+          }
+        `}} />
       </head>
       <body>
         <header className="nv-header">
           <a href="/" className="nv-badge">YGO TCG PH</a>
+          <AccountChip />
         </header>
         {children}
       </body>

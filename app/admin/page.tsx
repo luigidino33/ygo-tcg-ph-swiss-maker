@@ -1102,6 +1102,8 @@ function AdminDashboard() {
             </div>
           </div>
         )}
+
+        <AccountsCard />
       </div>
     );
   }
@@ -2300,6 +2302,113 @@ function ManualPairingEditor({ players, initial, onCancel, onSave }: ManualPairi
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+type Account = { username: string; player_name: string; created_at: string };
+
+function AccountsCard() {
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    fetchJSON("/api/admin/accounts").then((d) => setAccounts(d.accounts || [])).catch(() => setAccounts([]));
+  }, []);
+
+  const resetPassword = async (acc: Account) => {
+    const pw = prompt(`New password for @${acc.username} (${acc.player_name}), at least 8 characters:`);
+    if (!pw) return;
+    if (pw.length < 8) {
+      alert("Password must be at least 8 characters.");
+      return;
+    }
+    try {
+      await fetchJSON("/api/admin/accounts/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: acc.username, password: pw }),
+      });
+      alert(`Password reset for @${acc.username}. Give them the new password; they'll need to log in again.`);
+    } catch (e) {
+      alert(`Failed to reset password: ${errMsg(e)}`);
+    }
+  };
+
+  const changeName = async (acc: Account) => {
+    const name = prompt(
+      `New player name for @${acc.username} (currently "${acc.player_name}").\n\n` +
+      `"${acc.player_name}" will be freed for someone else. Past standings aren't renamed; ` +
+      `the account will show the history of whatever name you enter.`,
+      acc.player_name
+    );
+    if (!name || !name.trim() || name.trim() === acc.player_name) return;
+    try {
+      const res = await fetchJSON("/api/admin/accounts/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: acc.username, player_name: name }),
+      });
+      setAccounts((list) => (list || []).map((a) => (a.username === acc.username ? res.account : a)));
+    } catch (e) {
+      alert(`Failed to change name: ${errMsg(e)}`);
+    }
+  };
+
+  const deleteAccount = async (acc: Account) => {
+    if (!confirm(
+      `Delete @${acc.username}? This frees the name "${acc.player_name}" and signs them out. ` +
+      `Their tournament history stays. This can't be undone.`
+    )) return;
+    try {
+      await fetchJSON(`/api/admin/accounts/${encodeURIComponent(acc.username)}`, { method: "DELETE" });
+      setAccounts((list) => (list || []).filter((a) => a.username !== acc.username));
+    } catch (e) {
+      alert(`Failed to delete account: ${errMsg(e)}`);
+    }
+  };
+
+  const q = query.trim().toLowerCase();
+  const shown = (accounts || []).filter((a) => !q || a.username.includes(q) || a.player_name.toLowerCase().includes(q));
+
+  return (
+    <div className="card">
+      <h2>👤 Player Accounts{accounts ? ` (${accounts.length})` : ""}</h2>
+      {accounts === null ? (
+        <p style={{ color: "#86b4e6" }}>Loading...</p>
+      ) : accounts.length === 0 ? (
+        <p style={{ color: "#86b4e6", fontSize: 13 }}>No player accounts yet. Players sign up at /register.</p>
+      ) : (
+        <>
+          <p style={{ color: "#86b4e6", fontSize: 12, marginBottom: 10 }}>
+            Wrong person holding a name? Change or delete their account to free it; then the real player signs up with it,
+            or change their account to that name.
+          </p>
+          <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search username or player name" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflow: "auto" }}>
+            {shown.map((acc) => (
+              <div key={acc.username} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", border: "1px solid rgba(70,160,255,0.3)", borderRadius: 2, background: "rgba(4,22,52,0.6)" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{acc.player_name}</div>
+                  <div style={{ fontSize: 12, color: "#86b4e6" }}>@{acc.username}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button className="secondary" onClick={() => changeName(acc)} style={{ padding: "6px 14px", fontSize: 12 }}>
+                    Change name
+                  </button>
+                  <button className="secondary" onClick={() => resetPassword(acc)} style={{ padding: "6px 14px", fontSize: 12 }}>
+                    Reset password
+                  </button>
+                  <button className="secondary" onClick={() => deleteAccount(acc)} style={{ padding: "6px 14px", fontSize: 12, color: "#ff8a80" }}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+            {shown.length === 0 && <p style={{ color: "#86b4e6", fontSize: 13 }}>No matches.</p>}
+          </div>
+        </>
+      )}
     </div>
   );
 }

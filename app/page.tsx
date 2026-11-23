@@ -3,6 +3,7 @@ export default function HomePage() {
     { href: "/players?tab=history", icon: "📜", label: "Tournament Results" },
     { href: "/players?tab=leaderboard", icon: "👑", label: "Ranking" },
     { href: "/players?tab=metagame", icon: "📊", label: "Metagame" },
+    { href: "/decks", icon: "🃏", label: "GOAT Deckbuilder" },
   ];
 
   return (
