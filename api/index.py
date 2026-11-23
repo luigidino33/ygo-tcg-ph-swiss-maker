@@ -100,18 +100,6 @@ def _with_session(resp, doc: dict):
                   httponly=True, samesite="Lax", secure=_is_https(), path="/")
   return resp
 
-def name_owners(names: List[str]) -> Dict[str, str]:
-  # lowercase player name -> owning username, for names that belong to an account.
-  uniq = sorted({" ".join(n.split()).lower() for n in names if n})
-  out = {}
-  for name, claim in zip(uniq, kv_mget_json([claim_key(n) for n in uniq])):
-    if isinstance(claim, dict) and claim.get("username"):
-      out[name] = claim["username"]
-  return out
-
-def name_owner(name: str) -> Optional[str]:
-  return name_owners([name]).get(" ".join(name.split()).lower())
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Vercel KV (Upstash Redis) REST helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1166,29 +1154,41 @@ def _update_index_count(tid: str, count: int) -> None:
       e["player_count"] = count
   kv_set_json(TOURNAMENT_INDEX_KEY, idx)
 
+def _roster_entry(t: dict, user: Optional[dict]) -> Optional[dict]:
+  # The roster entry for a logged-in account: the one it registered (linked by username),
+  # else an organizer-added entry under the account's player name that no account has taken yet.
+  if not user:
+    return None
+  players = t.get("players", [])
+  linked = next((p for p in players if p.get("account") == user["username"]), None)
+  if linked:
+    return linked
+  name = " ".join(user["player_name"].split()).lower()
+  return next((p for p in players if not p.get("account") and " ".join(p["name"].split()).lower() == name), None)
+
+LOGIN_REQUIRED = {"error": "Log in to your player account first.", "login_required": True}
+
 @app.post("/api/tournaments/<tid>/register")
 def api_register(tid):
-  # Public self-registration for tournaments with registration enabled; closes at Round 1.
+  # Public self-registration (player accounts only); closes at Round 1.
   try:
     user = current_user()
-    name = " ".join(((request.get_json(force=True) or {}).get("name") or "").split())
-    if not name and user:
-      name = user["player_name"]
-    owner = name_owner(name) if name else None
-    if owner and (not user or user["username"] != owner):
-      return jsonify({"error": f"'{name}' belongs to a player account. Log in to register as {name}."}), 403
+    if not user:
+      return jsonify(LOGIN_REQUIRED), 401
 
     def mutate(t):
+      existing = _roster_entry(t, user)
+      if existing:
+        # Already on the roster (e.g. added by the organizer): link it to the account.
+        existing["account"] = user["username"]
+        return existing
       if not t.get("registration"):
         raise Reject({"error": "Registration is not open for this tournament."})
       if t.get("rounds"):
         raise Reject({"error": "Registration is closed (the tournament has started)."})
-      if owner:
-        # The account owner may already be on the roster (e.g. added by the organizer).
-        existing = next((p for p in t.get("players", []) if p["name"].strip().lower() == name.lower()), None)
-        if existing:
-          return existing
-      return _append_player(t, name)
+      player = _append_player(t, user["player_name"])
+      player["account"] = user["username"]
+      return player
 
     res = update_tdoc(tid, mutate)
     if not res:
@@ -1829,9 +1829,6 @@ def _can_edit_deck(t: dict, player: dict) -> bool:
   # or the round after they joined for late entrants.
   return not _decklist_locked(t) or (bool(player.get("joined_round")) and current_round_number(t) == player["joined_round"])
 
-def _edit_hash(token: str) -> str:
-  return hashlib.sha256(token.encode()).hexdigest()
-
 def _validate_goat_deck(body: dict, complete: bool = True):
   # Returns (sections, cards). complete=False allows unfinished decks (saved decks).
   sections: Dict[str, Dict[int, int]] = {}
@@ -1877,86 +1874,79 @@ def _deck_entries(sections: Dict[str, Dict[int, int]], cards: Dict[int, dict]) -
   return {sec: [{"id": cid, "name": cards[cid]["name"], "qty": q, "type": cards[cid]["type"], "ban": cards[cid]["ban"]}
                 for cid, q in counts.items()] for sec, counts in sections.items()}
 
-def _may_edit_submission(doc: dict, player: dict, token: str) -> bool:
-  # The owning account, or the device that submitted it (holds the edit token).
-  owner = name_owner(player["name"])
-  if owner:
-    return (current_user() or {}).get("username") == owner
-  return bool(token) and bool(doc.get("edit_hash")) and hmac.compare_digest(_edit_hash(token), doc["edit_hash"])
-
 @app.get("/api/tournaments/<tid>/decklist-status")
 def api_decklist_status(tid):
+  # Status for the logged-in player only; the roster isn't exposed here.
   try:
     t = read_tdoc_or_retry(tid)
     if not t:
       return jsonify({"error": "not found"}), 404
-    prefix = decks_key(tid)
-    submitted = {k[len(prefix):] for k in kv_keys(f"{prefix}*")}
-    players = t.get("players", [])
-    owners = name_owners([p["name"] for p in players])
-    me = (current_user() or {}).get("username")
-    rows = []
-    for p in players:
-      owner = owners.get(p["name"].strip().lower())
-      rows.append({"id": p["id"], "name": p["name"], "submitted": p["id"] in submitted,
-                   "can_submit": _can_submit_deck(t, p), "can_edit": _can_edit_deck(t, p),
-                   "claimed": bool(owner), "mine": bool(owner and owner == me)})
+    user = current_user()
+    p = _roster_entry(t, user)
+    me = None
+    if p:
+      me = {"id": p["id"], "name": p["name"], "submitted": kv_get_raw(decks_key(tid, p["id"])) is not None,
+            "can_submit": _can_submit_deck(t, p), "can_edit": _can_edit_deck(t, p)}
     resp = jsonify({
       "enabled": bool(t.get("decklists")),
       "registration": bool(t.get("registration")),
       "locked": _decklist_locked(t),
       "name": t["name"],
-      "players": rows,
+      "user": public_user(user) if user else None,
+      "me": me,
     })
     resp.headers["Cache-Control"] = "no-store"
     return resp
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
+def _deck_request(tid: str):
+  # (t, player, user) for the logged-in player's own entry, or a (response, status) error.
+  user = current_user()
+  if not user:
+    return None, (jsonify(LOGIN_REQUIRED), 401)
+  t = read_tdoc_or_retry(tid)
+  if not t:
+    return None, (jsonify({"error": "not found"}), 404)
+  player = _roster_entry(t, user)
+  if not player:
+    return None, (jsonify({"error": f"{user['player_name']} isn't registered in this tournament."}), 403)
+  return (t, player, user), None
+
 @app.post("/api/tournaments/<tid>/decklist")
 def api_submit_decklist(tid):
   try:
     body = request.get_json(force=True) or {}
-    pid = body.get("player_id")
-    t = read_tdoc_or_retry(tid)
-    if not t:
-      return jsonify({"error": "not found"}), 404
+    ctx, err = _deck_request(tid)
+    if err:
+      return err
+    t, player, user = ctx
     if not t.get("decklists"):
       return jsonify({"error": "Decklist submission is not enabled for this tournament."}), 400
-    player = next((p for p in t.get("players", []) if p["id"] == pid), None)
-    if not player:
-      return jsonify({"error": "Unknown player."}), 400
     if not _can_submit_deck(t, player):
       return jsonify({"error": "Decklist submission is closed (the tournament has started)."}), 400
-    owner = name_owner(player["name"])
-    if owner and (current_user() or {}).get("username") != owner:
-      return jsonify({"error": f"'{player['name']}' belongs to a player account. Log in as that player to submit this decklist."}), 403
     sections, cards = _validate_goat_deck(body)
+    pid = player["id"]
     key = decks_key(tid, pid)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     doc = {
       "player_id": pid,
       "player": player["name"],
+      "account": user["username"],
       "submitted_at": now,
       "archetype": _detect_goat_archetype(cards, sections["main"], sections["extra"]),
       **_deck_entries(sections, cards),
     }
-    token = secrets.token_urlsafe(24)
-    if kv_set_nx_json(key, {**doc, "edit_hash": _edit_hash(token)}):
-      return jsonify({"ok": True, "edit_token": token})
+    if kv_set_nx_json(key, doc):
+      return jsonify({"ok": True})
 
-    existing = kv_get_json(key) or {}
-    given = body.get("edit_token") or ""
-    if not _may_edit_submission(existing, player, given):
-      return jsonify({"error": "A decklist was already submitted for this player. Ask the organizer to reset it."}), 409
     if not _can_edit_deck(t, player):
       return jsonify({"error": "Decklists can't be changed once your first round has been paired. Ask the organizer."}), 409
+    existing = kv_get_json(key) or {}
     doc["submitted_at"] = existing.get("submitted_at", now)
     doc["updated_at"] = now
-    if existing.get("edit_hash"):
-      doc["edit_hash"] = existing["edit_hash"]
     kv_set_json(key, doc)
-    return jsonify({"ok": True, "updated": True, "edit_token": given or None})
+    return jsonify({"ok": True, "updated": True})
 
   except Reject as e:
     return reject_response(e)
@@ -1965,21 +1955,21 @@ def api_submit_decklist(tid):
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
-@app.post("/api/tournaments/<tid>/my-decklist")
+@app.get("/api/tournaments/<tid>/my-decklist")
 def api_my_decklist(tid):
-  # The submitted list for the owner/submitting device, so it can be edited. POST keeps the token out of URLs.
+  # The logged-in player's submitted list, so it can be edited.
   try:
-    body = request.get_json(force=True) or {}
-    pid = body.get("player_id")
-    t = read_tdoc_or_retry(tid)
-    if not t:
-      return jsonify({"error": "not found"}), 404
-    player = next((p for p in t.get("players", []) if p["id"] == pid), None)
-    doc = kv_get_json(decks_key(tid, pid)) if player else None
-    if not doc or not _may_edit_submission(doc, player, body.get("edit_token") or ""):
+    ctx, err = _deck_request(tid)
+    if err:
+      return err
+    t, player, _ = ctx
+    doc = kv_get_json(decks_key(tid, player["id"]))
+    if not doc:
       return jsonify({"error": "Decklist not found."}), 404
-    return jsonify({"deck": {s: [{"id": e["id"], "qty": e["qty"]} for e in doc.get(s, [])] for s in ("main", "extra", "side")},
+    resp = jsonify({"deck": {s: [{"id": e["id"], "qty": e["qty"]} for e in doc.get(s, [])] for s in ("main", "extra", "side")},
                     "can_edit": _can_edit_deck(t, player), "submitted_at": doc.get("submitted_at"), "updated_at": doc.get("updated_at")})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
   except Exception as e:
     return jsonify({"error": str(e)}), 500
 
