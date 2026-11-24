@@ -1840,13 +1840,12 @@ def _validate_goat_deck(body: dict, complete: bool = True):
         raise Reject({"error": "Invalid card quantity."})
       counts[cid] = counts.get(cid, 0) + qty
     sections[sec] = counts
-  main_n, extra_n, side_n = (sum(sections[s].values()) for s in ("main", "extra", "side"))
+  # No Extra Deck size limit: the GOAT-era Fusion Deck was unlimited.
+  main_n, side_n = (sum(sections[s].values()) for s in ("main", "side"))
   if complete and main_n < 40:
     raise Reject({"error": f"Main Deck must have 40-60 cards (has {main_n})."})
   if main_n > 60:
     raise Reject({"error": f"Main Deck must have 40-60 cards (has {main_n})."})
-  if extra_n > 15:
-    raise Reject({"error": f"Extra Deck can have at most 15 cards (has {extra_n})."})
   if side_n > 15:
     raise Reject({"error": f"Side Deck can have at most 15 cards (has {side_n})."})
   totals: Dict[int, int] = {}
