@@ -26,7 +26,7 @@ export type Me = { username: string; player_name: string };
 export const EMPTY_DECK: Deck = { main: {}, extra: {}, side: {} };
 export const LIMITS: Record<Section, { min: number; max: number }> = {
   main: { min: 40, max: 60 },
-  extra: { min: 0, max: 15 },
+  extra: { min: 0, max: Infinity }, // GOAT-era Fusion Deck has no size limit
   side: { min: 0, max: 15 },
 };
 const SECTION_LABEL: Record<Section, string> = { main: "Main Deck", extra: "Extra Deck", side: "Side Deck" };
@@ -315,7 +315,8 @@ export default function DeckBuilder({ state, title, subtitle, actions, notes, pr
   const renderSection = (section: Section) => {
     const tiles = sortedTiles(section);
     const count = tiles.length;
-    const slots = Math.max(section === "main" ? LIMITS.main.min : LIMITS[section].max, count);
+    const max = LIMITS[section].max;
+    const slots = Math.max(section === "main" ? LIMITS.main.min : Number.isFinite(max) ? max : 15, count);
     const short = section === "main" && count < LIMITS.main.min;
     return (
       <div className="md-section">
@@ -330,7 +331,7 @@ export default function DeckBuilder({ state, title, subtitle, actions, notes, pr
           )}
           <span className="md-count" style={short ? { color: "#ff8a80", borderColor: "#ff8a80" } : undefined}>
             {count}
-            <small>/{section === "main" ? `${LIMITS.main.min}-${LIMITS.main.max}` : LIMITS[section].max}</small>
+            {section === "main" ? <small>/{LIMITS.main.min}-{LIMITS.main.max}</small> : Number.isFinite(max) ? <small>/{max}</small> : null}
           </span>
         </div>
         <div className="md-grid">
